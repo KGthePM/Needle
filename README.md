@@ -60,6 +60,8 @@ On the Mac, Claude Code keeps its sign-in in the Keychain. During install, macOS
 
 In the menu, each bar is green, amber or red by how much is left, and the word after the reset time says how you're pacing: **▲ fast** (using it faster than it resets), **● on pace**, or **▼ plenty**. Hover over a row for the full sentence. Services without a key are grouped on one "Not set up" line. SwiftBar refreshes every 5 minutes (the `.5m.` in the file name).
 
+The installer offers to open SwiftBar at login, so Needle is back in the menu bar after a restart. To change that later, use **System Settings** > **General** > **Login Items**. On Linux the applet loads with the panel, so there's nothing to set.
+
 ## Uninstall
 
 ```bash

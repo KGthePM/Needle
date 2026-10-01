@@ -71,6 +71,23 @@ else
   echo "No Claude Code sign-in found in the Keychain. Run \`claude\` and log in, then Refresh."
 fi
 
+# 6. Open SwiftBar at login, so Needle is in the menu bar after a restart.
+SWIFTBAR_APP="$(mdfind "kMDItemCFBundleIdentifier == 'com.ameba.SwiftBar'" 2>/dev/null | head -1)"
+SWIFTBAR_APP="${SWIFTBAR_APP:-/Applications/SwiftBar.app}"
+LOGIN_ITEMS="$(osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null || true)"
+if [ -d "$SWIFTBAR_APP" ] && [[ "$LOGIN_ITEMS" != *SwiftBar* ]]; then
+  echo
+  read -r -p "Open SwiftBar at login so Needle is there after a restart? [Y/n] " ANSWER || ANSWER=y
+  if [[ ! "$ANSWER" =~ ^[Nn] ]]; then
+    echo "If macOS asks to let Terminal control System Events, click OK."
+    if osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$SWIFTBAR_APP\", hidden:false}" >/dev/null 2>&1; then
+      echo "SwiftBar will open at login."
+    else
+      echo "Couldn't add it. Turn on Launch at Login in SwiftBar's Preferences instead."
+    fi
+  fi
+fi
+
 open -g "swiftbar://refreshallplugins" >/dev/null 2>&1 || true
 
 echo
