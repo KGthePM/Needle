@@ -1,0 +1,24 @@
+{
+  "head": { "type": "header", "description": "Needle" },
+  "refresh-minutes": {
+    "type": "spinbutton",
+    "default": 10,
+    "min": 0,
+    "max": 120,
+    "step": 5,
+    "units": "minutes",
+    "description": "Refresh automatically every",
+    "tooltip": "0 turns auto-refresh off. Claude is never asked more than once every 5 minutes either way."
+  },
+  "panel-style": {
+    "type": "combobox",
+    "default": "compact",
+    "options": { "Percentages": "compact", "Icon only": "icon" },
+    "description": "Show in panel"
+  },
+  "show-remaining": {
+    "type": "switch",
+    "default": true,
+    "description": "Show what's left (off shows what's used)"
+  }
+}

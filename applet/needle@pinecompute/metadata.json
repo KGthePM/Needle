@@ -1,0 +1,8 @@
+{
+  "uuid": "needle@pinecompute",
+  "name": "Needle",
+  "description": "Claude, Codex, z.ai and OpenRouter limits at a glance",
+  "version": "1.0.0",
+  "max-instances": 1,
+  "author": "KGthePM"
+}

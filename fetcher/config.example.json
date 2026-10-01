@@ -1,0 +1,22 @@
+{
+  "claude": {
+    "enabled": true,
+    "_note": "Uses your Claude Code sign-in from ~/.claude/.credentials.json. Nothing to paste here.",
+    "show_model_windows": false
+  },
+  "codex": {
+    "enabled": true,
+    "_note": "Uses your Codex sign-in from ~/.codex/auth.json (ChatGPT plan). Nothing to paste here."
+  },
+  "zai": {
+    "enabled": true,
+    "api_key": "",
+    "base_url": "https://api.z.ai/api/monitor",
+    "show_tool_calls": true
+  },
+  "openrouter": {
+    "enabled": true,
+    "_note": "A management key shows your account balance. A regular key shows that key's own limit.",
+    "api_key": ""
+  }
+}
