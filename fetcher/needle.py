@@ -8,7 +8,7 @@ needle: one JSON snapshot of your Claude, Codex, z.ai and OpenRouter limits.
   needle --force    skip cooldowns for z.ai / OpenRouter (Claude and Codex keep a floor)
   needle --debug    also dump raw API responses to stderr
 
-Standard library only. Works on Linux and macOS.
+Standard library only. Works on Linux, macOS and Windows.
 """
 import base64
 import json
@@ -353,7 +353,15 @@ def write_cache(data):
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CACHE_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2))
-    os.replace(tmp, CACHE_PATH)
+    # On Windows the rename fails while another process has the cache open. Retry
+    # briefly, then skip this write: the next refresh will save it.
+    for _ in range(3):
+        try:
+            os.replace(tmp, CACHE_PATH)
+            return
+        except PermissionError:
+            time.sleep(0.2)
+    log("Couldn't update the cache file; it's in use.")
 
 
 def human(secs):
@@ -392,7 +400,8 @@ def main(argv):
     cfg, config_error = {}, None
     if CONFIG_PATH.exists():
         try:
-            cfg = json.loads(CONFIG_PATH.read_text())
+            # utf-8-sig: Notepad on older Windows saves a BOM, and Windows' default codec isn't UTF-8.
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
         except ValueError as e:
             config_error = f"Keys file has a formatting error near line {getattr(e, 'lineno', '?')}."
         except OSError:
