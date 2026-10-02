@@ -2,9 +2,9 @@
 
 A PineCompute project.
 
-Shows how much of your Claude, Codex, z.ai and OpenRouter limits you have left: a Cinnamon panel applet on Linux Mint and a SwiftBar menu-bar item on macOS. Both use the same fetcher and the same keys file.
+Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you have left: a Cinnamon panel applet on Linux Mint, a SwiftBar menu-bar item on macOS, and a native system-tray app on Windows. All three use the same fetcher and settings format.
 
-The panel reads like `C 58%   X 71%   Z 82%   $14`. Each percentage is the tighter of that service's 5-hour and weekly windows, so it answers "how much can I use right now." The text turns amber under 30% and red under 10%. Click it for the full breakdown.
+The compact display reads like `C 58%   G 71%   Z 82%   $14`. Each percentage is the tighter of that service's 5-hour and weekly windows, so it answers "how much can I use right now." The display turns amber under 30% and red under 10%. Click it for the full breakdown.
 
 ## Install on Linux Mint
 
@@ -15,16 +15,16 @@ git clone https://github.com/KGthePM/Needle.git && cd Needle
 
 Then right-click the panel, choose **Applets**, find **Needle** and press **+**.
 
-## Keys
+## Add services
 
-On the Mac, click **Add z.ai key…** or **Add OpenRouter key…** in the menu (or **Edit keys** > **Set … key…**) and paste the key into the box. **Get a key…** opens the page where you create one. On Linux, open `~/.config/needle/config.json` (or click **Edit keys** in the popup).
+New installations start empty. Open Needle and choose **Add more**, then select each provider you want to track. A service moves into the main usage view only after Needle retrieves usable data from it. Failed or incomplete setups stay under **Add more** with their error and retry options. z.ai and OpenRouter open a password-style box for the API key; **Get an API key** opens the provider's key page. Claude and ChatGPT/Codex use existing command-line sign-ins and do not need a pasted key.
 
 - **Claude**: nothing to add. It uses your Claude Code sign-in, so you need to have logged in to `claude` with your Pro or Max plan.
-- **Codex**: nothing to add. It uses your Codex sign-in from `~/.codex/auth.json`, so you need to have logged in to `codex` with your ChatGPT plan (Plus, Pro, Business and so on). It shows the same 5-hour and weekly limits as `/status` in Codex. If you set Codex to keep its sign-in in the Keychain (`cli_auth_credentials_store`), switch it back to the default file storage.
+- **ChatGPT / Codex**: nothing to add. Needle first uses the OpenAI OAuth sign-in managed by OpenCode, then falls back to `~/.codex/auth.json`. Sign into OpenAI from OpenCode with the **ChatGPT Plus/Pro** option, or log into Codex CLI with your ChatGPT plan. A ChatGPT subscription does not include OpenAI API credits, and no API key is needed here. Needle reads the access token in place but never copies, refreshes, or writes it. Set `"credential_source": "opencode"` or `"codex"` if both tools use different accounts.
 - **z.ai**: paste your Coding Plan API key.
 - **OpenRouter**: a management key shows your whole account balance. A regular key shows that key's own spending limit.
 
-Set `"enabled": false` on anything you don't use and it disappears from the panel.
+Use **Settings** to change a key or remove a service. Removing a keyed service can retain its key for an easier reconnect or delete it. Advanced users can still edit `config.json` directly under `~/.config/needle` on Linux and macOS or `%APPDATA%\Needle` on Windows.
 
 ## Reading the gauges
 
@@ -33,7 +33,8 @@ The colored fill is what's left. The thin tick is how much time is left in that 
 ## Refreshing
 
 - Opening the popup refreshes on its own if the numbers are more than 5 minutes old.
-- Auto-refresh runs every 10 minutes by default. Change it in the applet's settings.
+- Auto-refresh runs every 10 minutes by default. Cinnamon users can change it in Needle's **Settings** pane.
+- The Windows tray app also refreshes every 10 minutes and shows the compact summary when you hover over its icon.
 - Claude is never asked more than once every 5 minutes, even if you click **Refresh** repeatedly. Anthropic backs off hard on frequent polling, and that backoff can slow Claude Code itself.
 
 ## Terminal
@@ -43,9 +44,23 @@ python3 ~/.local/bin/needle --text     # readable summary
 python3 ~/.local/bin/needle --debug    # also prints raw API responses
 ```
 
+On Windows, choose **Settings** > **Debug in terminal** from the tray flyout.
+
 ## If something looks off
 
-The Claude, Codex and z.ai usage endpoints aren't officially documented and can change. If numbers look wrong or a provider shows an error, run `needle --text --debug` (or right-click the applet and choose **Open in terminal**) and check the raw response.
+The Claude, ChatGPT/Codex and z.ai usage endpoints aren't officially documented and can change. If numbers look wrong or a provider shows an error, run `needle --text --debug` (or use the desktop menu's debug action) and check the raw response. If the OpenCode sign-in has expired, open OpenCode once so it can refresh its own OAuth session.
+
+## Install on Windows
+
+Python 3 is required; the included Windows PowerShell is sufficient. From PowerShell in the cloned repository:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-windows.ps1
+```
+
+Needle appears in the notification area and starts with Windows by default. Hover over the gauge icon for the compact summary, then click it for the usage flyout. The flyout keeps usage on its main page and places refresh, service management, startup, debug and exit actions under **Settings**. Windows only allows an icon in the notification area, so the percentages appear in its tooltip and flyout rather than directly on the taskbar.
+
+Settings are stored in `%APPDATA%\Needle\config.json`; cached usage and the installed app live under `%LOCALAPPDATA%\Needle`. Use `-NoStartup` or `-NoLaunch` with the installer when needed.
 
 ## Install on macOS
 
@@ -60,7 +75,7 @@ On the Mac, Claude Code keeps its sign-in in the Keychain. During install, macOS
 
 In the menu, each bar is green, amber or red by how much is left, and the word after the reset time says how you're pacing: **▲ fast** (using it faster than it resets), **● on pace**, or **▼ plenty**. Hover over a row for the full sentence. Services without a key are grouped on one "Not set up" line. SwiftBar refreshes every 5 minutes (the `.5m.` in the file name).
 
-The installer offers to open SwiftBar at login, so Needle is back in the menu bar after a restart. To change that later, use **System Settings** > **General** > **Login Items**. On Linux the applet loads with the panel, so there's nothing to set.
+The installer offers to open SwiftBar at login, so Needle is back in the menu bar after a restart. Needle uses native **Add more** and **Settings** submenus on macOS. To change login behavior later, use **System Settings** > **General** > **Login Items**. On Linux the applet loads with the panel, so there's nothing to set.
 
 ## Uninstall
 
@@ -68,4 +83,11 @@ The installer offers to open SwiftBar at login, so Needle is back in the menu ba
 ./uninstall.sh                # Linux, keeps your keys
 ./mac/uninstall-mac.sh        # macOS, keeps your keys
 # add --purge to either one to remove the keys too
+```
+
+On Windows:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\uninstall-windows.ps1
+# add -Purge to remove settings and keys too
 ```

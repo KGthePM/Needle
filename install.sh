@@ -41,7 +41,7 @@ echo "  Fetcher  $BIN"
 echo "  Keys     $CONF"
 echo
 if [ "${NEW_CONF:-0}" = 1 ]; then
-  echo "Next: add your z.ai and OpenRouter keys to the file above (Claude and Codex need nothing)."
+  echo "Next: open Needle from the panel and choose Add more."
 fi
 echo "Then right-click your panel > Applets, find \"Needle\", and press +."
 echo "Test from a terminal any time with:  python3 $BIN --text"

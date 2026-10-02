@@ -1,21 +1,22 @@
 {
   "claude": {
-    "enabled": true,
+    "enabled": false,
     "_note": "Uses your Claude Code sign-in from ~/.claude/.credentials.json. Nothing to paste here.",
     "show_model_windows": false
   },
   "codex": {
-    "enabled": true,
-    "_note": "Uses your Codex sign-in from ~/.codex/auth.json (ChatGPT plan). Nothing to paste here."
+    "enabled": false,
+    "_note": "Uses your OpenCode ChatGPT sign-in first, then Codex CLI as a fallback. Nothing to paste here.",
+    "credential_source": "auto"
   },
   "zai": {
-    "enabled": true,
+    "enabled": false,
     "api_key": "",
     "base_url": "https://api.z.ai/api/monitor",
     "show_tool_calls": true
   },
   "openrouter": {
-    "enabled": true,
+    "enabled": false,
     "_note": "A management key shows your account balance. A regular key shows that key's own limit.",
     "api_key": ""
   }

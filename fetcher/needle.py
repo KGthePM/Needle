@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-needle: one JSON snapshot of your Claude, Codex, z.ai and OpenRouter limits.
+needle: one JSON snapshot of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits.
 
   needle            refresh (respects per-provider cooldowns), print JSON
   needle --text     same, but a readable table for the terminal
@@ -8,9 +8,10 @@ needle: one JSON snapshot of your Claude, Codex, z.ai and OpenRouter limits.
   needle --force    skip cooldowns for z.ai / OpenRouter (Claude and Codex keep a floor)
   needle --debug    also dump raw API responses to stderr
 
-Standard library only. Works on Linux and macOS.
+Standard library only. Works on Linux, macOS and Windows.
 """
 import base64
+import binascii
 import json
 import os
 import subprocess
@@ -18,17 +19,36 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "1.1.0"
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+VERSION = "0.4.0"
 TIMEOUT = 10
 
-CONFIG_PATH = Path(
-    os.environ.get("NEEDLE_CONFIG")
-    or Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "needle" / "config.json"
-).expanduser()
-CACHE_PATH = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")).expanduser() / "needle" / "usage.json"
+
+def default_paths(platform=None, environ=None, home=None):
+    """Return platform-native config and cache paths."""
+    platform = platform or sys.platform
+    environ = os.environ if environ is None else environ
+    home = Path.home() if home is None else Path(home)
+    if platform == "win32":
+        config_root = Path(environ.get("APPDATA") or home / "AppData" / "Roaming")
+        cache_root = Path(environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        return config_root / "Needle" / "config.json", cache_root / "Needle" / "cache" / "usage.json"
+    config_root = Path(environ.get("XDG_CONFIG_HOME") or home / ".config")
+    cache_root = Path(environ.get("XDG_CACHE_HOME") or home / ".cache")
+    return config_root / "needle" / "config.json", cache_root / "needle" / "usage.json"
+
+
+_DEFAULT_CONFIG, _DEFAULT_CACHE = default_paths()
+CONFIG_PATH = Path(os.environ.get("NEEDLE_CONFIG") or _DEFAULT_CONFIG).expanduser()
+CACHE_PATH = Path(os.environ.get("NEEDLE_CACHE") or _DEFAULT_CACHE).expanduser()
 
 # Seconds between real API calls per provider. Anthropic's usage endpoint backs off
 # hard if polled too often (and that backoff can hit Claude Code itself), so Claude
@@ -46,6 +66,10 @@ class ProviderError(Exception):
     pass
 
 
+class ResponseError(ProviderError):
+    """The provider answered, but its response could not produce usage data."""
+
+
 class MissingKey(ProviderError):
     """No key configured yet. Front ends can show this as 'not set up' rather than an error."""
 
@@ -59,9 +83,29 @@ def log(*parts):
 
 def load_json(path, default):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return default
+
+
+def write_json(path, data):
+    """Atomically write private JSON configuration or cache data."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+        os.replace(tmp, path)
+        if os.name != "nt":
+            os.chmod(path, 0o600)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def http_get(url, headers):
@@ -106,8 +150,8 @@ def friendly(err, provider):
             if provider == "claude":
                 return "Sign-in expired. Open Claude Code once to refresh it."
             if provider == "codex":
-                return "Sign-in expired. Open Codex once to refresh it."
-            return "API key was rejected. Check it with Edit keys."
+                return "Sign-in expired. Open OpenCode or Codex once to refresh it."
+            return "API key was rejected. Change it in Settings."
         if err.code == 403:
             return "This key isn't allowed to read usage."
         if err.code == 429:
@@ -162,44 +206,109 @@ def fetch_claude(cfg):
         if isinstance(w, dict) and w.get("utilization") is not None:
             windows.append(window(label, w["utilization"], parse_ts(w.get("resets_at")), length))
     if not windows:
-        raise ProviderError("No usage windows returned for this account.")
+        raise ResponseError("No usage windows returned for this account.")
     return {"plan": plan.title() if isinstance(plan, str) else None, "windows": windows}
 
 
-# ----------------------------------------------------------------- Codex
+# --------------------------------------------------------- ChatGPT / Codex
 
 def jwt_claims(token):
     """Payload of a JWT, unverified. Only used to read expiry and account id."""
     try:
         part = token.split(".")[1]
         return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
-    except (AttributeError, IndexError, ValueError):
+    except (AttributeError, binascii.Error, IndexError, UnicodeDecodeError, ValueError):
         return {}
 
 
-def codex_credentials(cfg):
+def account_from_claims(claims):
+    if not isinstance(claims, dict):
+        return None
+    auth = claims.get("https://api.openai.com/auth") or {}
+    if not isinstance(auth, dict):
+        auth = {}
+    organizations = claims.get("organizations") or []
+    organization = organizations[0] if organizations and isinstance(organizations[0], dict) else {}
+    return claims.get("chatgpt_account_id") or auth.get("chatgpt_account_id") or organization.get("id")
+
+
+def opencode_credentials(cfg):
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    path = Path(cfg.get("opencode_auth_path", data_home / "opencode" / "auth.json")).expanduser()
+    if not path.exists():
+        return None
+    data = load_json(path, None)
+    if not isinstance(data, dict):
+        raise ProviderError("Couldn't read OpenCode's sign-in file.")
+    auth = data.get("openai")
+    if not isinstance(auth, dict):
+        return None
+    if auth.get("type") != "oauth":
+        raise ProviderError("OpenCode is using an API key, not a ChatGPT plan sign-in.")
+    token = auth.get("access")
+    if not token:
+        raise ProviderError("OpenCode's ChatGPT sign-in has no access token. Reconnect OpenAI in OpenCode.")
+    expires = parse_ts(auth.get("expires"))
+    if expires is None:
+        expires = parse_ts(jwt_claims(token).get("exp"))
+    if expires is not None and expires < time.time():
+        raise ProviderError("OpenCode's ChatGPT sign-in expired. Open OpenCode once to refresh it.")
+    account = auth.get("accountId") or account_from_claims(jwt_claims(token))
+    return token, account, "OpenCode"
+
+
+def codex_cli_credentials(cfg):
     home = Path(os.environ.get("CODEX_HOME") or "~/.codex").expanduser()
     path = Path(cfg.get("auth_path", home / "auth.json")).expanduser()
-    data = load_json(path, None) if path.exists() else None
-    if not data:
-        raise ProviderError("Not signed in. Run `codex` and log in with your ChatGPT plan.")
+    if not path.exists():
+        return None
+    data = load_json(path, None)
+    if not isinstance(data, dict):
+        raise ProviderError("Couldn't read Codex's sign-in file.")
     tokens = data.get("tokens") or {}
     token = tokens.get("access_token")
     if not token:
         raise ProviderError("No plan sign-in found. Codex may be using an API key.")
     claims = jwt_claims(token)
-    if claims.get("exp") and claims["exp"] < time.time():
+    expires = parse_ts(claims.get("exp"))
+    if expires is not None and expires < time.time():
         raise ProviderError("Sign-in expired. Open Codex once to refresh it.")
-    account = tokens.get("account_id") or jwt_claims(tokens.get("id_token")).get(
-        "https://api.openai.com/auth", {}).get("chatgpt_account_id")
-    return token, account
+    account = tokens.get("account_id") or account_from_claims(jwt_claims(tokens.get("id_token"))) \
+        or account_from_claims(claims)
+    return token, account, "Codex CLI"
+
+
+def codex_credentials(cfg):
+    source = str(cfg.get("credential_source", "auto")).lower()
+    if source not in ("auto", "opencode", "codex"):
+        raise ProviderError("credential_source must be auto, opencode or codex.")
+    readers = {
+        "opencode": opencode_credentials,
+        "codex": codex_cli_credentials,
+    }
+    order = ("opencode", "codex") if source == "auto" else (source,)
+    problems = []
+    for name in order:
+        try:
+            credentials = readers[name](cfg)
+            if credentials:
+                return credentials
+        except ProviderError as err:
+            problems.append(str(err))
+    if problems:
+        raise ProviderError(problems[0])
+    if source == "opencode":
+        raise ProviderError("Not signed in. Connect OpenAI to your ChatGPT plan in OpenCode.")
+    if source == "codex":
+        raise ProviderError("Not signed in. Run `codex` and log in with your ChatGPT plan.")
+    raise ProviderError("Not signed in. Connect OpenAI in OpenCode or log in with Codex CLI.")
 
 
 CODEX_PLANS = {"prolite": "Pro Lite", "promax": "Pro Max"}
 
 
 def fetch_codex(cfg):
-    token, account = codex_credentials(cfg)
+    token, account, source = codex_credentials(cfg)
     headers = {
         "Authorization": f"Bearer {token}",
         # chatgpt.com sits behind bot protection, so present the same agent Codex does.
@@ -220,11 +329,11 @@ def fetch_codex(cfg):
         windows.append(window(label, w["used_percent"], parse_ts(w.get("reset_at")),
                               FIVE_HOURS if label == "5-hour" else ONE_WEEK))
     if not windows:
-        raise ProviderError("No usage windows returned for this account.")
+        raise ResponseError("No usage windows returned for this account.")
     windows.sort(key=lambda w: w["label"] != "5-hour")
     plan = data.get("plan_type")
     plan = CODEX_PLANS.get(plan, plan.replace("_", " ").title()) if isinstance(plan, str) else None
-    return {"plan": plan, "windows": windows}
+    return {"plan": plan, "source": source, "windows": windows}
 
 
 # ----------------------------------------------------------------- z.ai
@@ -235,11 +344,11 @@ ZAI_UNITS = {3: ("5-hour", FIVE_HOURS), 6: ("Weekly", ONE_WEEK)}  # TOKENS_LIMIT
 def fetch_zai(cfg):
     key = os.environ.get("ZAI_API_KEY") or cfg.get("api_key")
     if not key:
-        raise MissingKey("Add your z.ai API key with Edit keys.")
+        raise MissingKey("Add your z.ai API key in Settings.")
     base = cfg.get("base_url", "https://api.z.ai/api/monitor").rstrip("/")
     body = http_get(f"{base}/usage/quota/limit", {"Authorization": f"Bearer {key}", "Accept-Language": "en-US,en"})
     if body.get("success") is False or body.get("code") not in (None, 0, 200):
-        raise ProviderError(f"z.ai said: {body.get('msg') or 'unknown error'}")
+        raise ResponseError(f"z.ai said: {body.get('msg') or 'unknown error'}")
     data = body.get("data") if isinstance(body.get("data"), dict) else body
     limits = data.get("limits") or []
 
@@ -272,7 +381,7 @@ def fetch_zai(cfg):
     token_windows.sort(key=lambda t: order.get(t[0], 9))
     windows = [window(lbl, p, r, ln) for lbl, ln, p, r in token_windows] + extra
     if not windows:
-        raise ProviderError("No quota windows returned. Is this a Coding Plan key?")
+        raise ResponseError("No quota windows returned. Is this a Coding Plan key?")
     level = data.get("level")
     return {"plan": str(level).title() if level else None, "windows": windows}
 
@@ -282,7 +391,7 @@ def fetch_zai(cfg):
 def fetch_openrouter(cfg):
     key = os.environ.get("OPENROUTER_API_KEY") or cfg.get("api_key")
     if not key:
-        raise MissingKey("Add an OpenRouter key with Edit keys.")
+        raise MissingKey("Add an OpenRouter key in Settings.")
     auth = {"Authorization": f"Bearer {key}"}
     try:  # account balance (needs a management key)
         d = http_get("https://openrouter.ai/api/v1/credits", auth)["data"]
@@ -303,10 +412,80 @@ def fetch_openrouter(cfg):
 
 PROVIDERS = [
     ("claude", "Claude", fetch_claude),
-    ("codex", "Codex", fetch_codex),
+    ("codex", "ChatGPT / Codex", fetch_codex),
     ("zai", "z.ai", fetch_zai),
     ("openrouter", "OpenRouter", fetch_openrouter),
 ]
+PROVIDER_IDS = {provider[0] for provider in PROVIDERS}
+KEY_PROVIDERS = {"zai", "openrouter"}
+
+
+def configure_service(provider, enabled=None, api_key=None, clear_key=False):
+    """Update one service without making front ends rewrite the config file."""
+    if provider not in PROVIDER_IDS:
+        raise ValueError(f"Unknown service: {provider}")
+    if api_key is not None and provider not in KEY_PROVIDERS:
+        raise ValueError(f"{provider} does not use an API key")
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as err:
+            raise ValueError("The settings file could not be read; fix it before changing services.") from err
+    else:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        raise ValueError("The settings file does not contain a JSON object.")
+    section = cfg.get(provider)
+    if not isinstance(section, dict):
+        section = {}
+        cfg[provider] = section
+    if enabled is not None:
+        section["enabled"] = bool(enabled)
+    if api_key is not None:
+        section["api_key"] = api_key
+        section["enabled"] = True
+    if clear_key:
+        section.pop("api_key", None)
+    write_json(CONFIG_PATH, cfg)
+
+
+def run_config_command(argv):
+    """Handle service mutations. Return None when argv is a normal fetch command."""
+    commands = {
+        "--enable-service": "enable",
+        "--disable-service": "disable",
+        "--set-service-key": "set-key",
+        "--clear-service-key": "clear-key",
+    }
+    selected = [(flag, action) for flag, action in commands.items() if flag in argv]
+    if not selected:
+        return None
+    if len(selected) != 1:
+        print("Choose one service configuration action at a time.", file=sys.stderr)
+        return 2
+    flag, action = selected[0]
+    try:
+        index = argv.index(flag)
+        provider = argv[index + 1]
+    except IndexError:
+        print(f"{flag} requires a service id.", file=sys.stderr)
+        return 2
+    try:
+        if action == "enable":
+            configure_service(provider, enabled=True)
+        elif action == "disable":
+            configure_service(provider, enabled=False)
+        elif action == "clear-key":
+            configure_service(provider, clear_key=True)
+        else:
+            key = sys.stdin.read().strip()
+            if not key:
+                raise ValueError("No API key was provided.")
+            configure_service(provider, api_key=key)
+    except (OSError, ValueError) as err:
+        print(str(err), file=sys.stderr)
+        return 2
+    return 0
 
 
 # ----------------------------------------------------------------- main
@@ -316,8 +495,8 @@ def snapshot(cfg, cache, cached_only=False, force=False):
     now = time.time()
     out = []
     for pid, name, fetch in PROVIDERS:
-        pcfg = cfg.get(pid, {})
-        if not pcfg.get("enabled", True):
+        pcfg = cfg.get(pid)
+        if not isinstance(pcfg, dict) or not pcfg.get("enabled", True):
             continue
         prev = previous.get(pid)
         if cached_only:
@@ -343,17 +522,55 @@ def snapshot(cfg, cache, cached_only=False, force=False):
                 result = {"id": pid, "name": name, "ok": False, "error": msg}
                 if isinstance(err, MissingKey):
                     result["needs_key"] = True
-            if not isinstance(err, ProviderError):  # setup problems can retry immediately
+            if isinstance(err, ResponseError) or not isinstance(err, ProviderError):
                 result["attempted_at"] = now
         out.append(result)
+    for provider in out:
+        # A service belongs in the usage view once it has produced usable data.
+        # Cached data keeps it connected during temporary refresh failures.
+        provider["connected"] = bool(provider.get("windows") or provider.get("balance"))
     return {"version": VERSION, "updated": now, "providers": out}
 
 
-def write_cache(data):
+@contextmanager
+def cache_lock(timeout=120):
+    """Serialize refreshes so every process sees the latest cooldown state."""
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CACHE_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    os.replace(tmp, CACHE_PATH)
+    path = CACHE_PATH.with_suffix(CACHE_PATH.suffix + ".lock")
+    handle = open(path, "a+b")  # noqa: SIM115 - held for the context lifetime
+    if os.name == "nt":
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+    deadline = time.monotonic() + timeout
+    acquired = False
+    try:
+        while not acquired:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Another Needle refresh is still running.") from None
+                time.sleep(0.1)
+        yield
+    finally:
+        if acquired:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def write_cache(data):
+    write_json(CACHE_PATH, data)
 
 
 def human(secs):
@@ -388,23 +605,41 @@ def main(argv):
     if "--version" in argv:
         print(VERSION)
         return 0
+    config_result = run_config_command(argv)
+    if config_result is not None:
+        return config_result
     DEBUG = "--debug" in argv
     cfg, config_error = {}, None
     if CONFIG_PATH.exists():
         try:
-            cfg = json.loads(CONFIG_PATH.read_text())
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
         except ValueError as e:
             config_error = f"Keys file has a formatting error near line {getattr(e, 'lineno', '?')}."
         except OSError:
             config_error = "Couldn't read the keys file."
-    cache = load_json(CACHE_PATH, {})
-    data = snapshot(cfg, cache, cached_only="--cached" in argv, force="--force" in argv)
-    if config_error:
-        for p in data["providers"]:
-            if p["id"] not in ("claude", "codex") and not p.get("windows") and not p.get("balance"):
-                p["error"] = config_error
-    if "--cached" not in argv:
-        write_cache(data)
+    cached_only = "--cached" in argv
+
+    def collect(cache, cache_only=cached_only):
+        result = snapshot(cfg, cache, cached_only=cache_only, force="--force" in argv)
+        if config_error:
+            for provider in result["providers"]:
+                if provider["id"] not in ("claude", "codex") and not provider.get("windows") \
+                        and not provider.get("balance"):
+                    provider["error"] = config_error
+        return result
+
+    if cached_only:
+        data = collect(load_json(CACHE_PATH, {}))
+    else:
+        try:
+            with cache_lock():
+                data = collect(load_json(CACHE_PATH, {}))
+                write_cache(data)
+        except TimeoutError as err:
+            data = collect(load_json(CACHE_PATH, {}), cache_only=True)
+            for provider in data["providers"]:
+                if not provider.get("error"):
+                    provider["error"] = str(err)
     if "--text" in argv:
         print_text(data)
     else:

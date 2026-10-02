@@ -97,5 +97,5 @@ echo "  Fetcher  $BIN"
 echo "  Keys     $CONF"
 if [ "${NEW_CONF:-0}" = 1 ]; then
   echo
-  echo "Next: add your z.ai and OpenRouter keys (menu bar > Edit keys). Claude and Codex need nothing."
+  echo "Next: choose Add more from the Needle menu."
 fi

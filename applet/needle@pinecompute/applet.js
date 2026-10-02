@@ -1,11 +1,13 @@
 // Needle — Cinnamon panel applet
-// Shows Claude, Codex, z.ai and OpenRouter limits. All network work happens in the
+// Shows Claude, ChatGPT/Codex, z.ai and OpenRouter limits. All network work happens in the
 // `needle` Python fetcher; this file only runs it and draws the result.
 
 const Applet = imports.ui.applet;
 const PopupMenu = imports.ui.popupMenu;
+const ModalDialog = imports.ui.modalDialog;
 const Settings = imports.ui.settings;
 const Util = imports.misc.util;
+const ByteArray = imports.byteArray;
 const St = imports.gi.St;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
@@ -15,13 +17,19 @@ const Pango = imports.gi.Pango;
 const UUID = "needle@pinecompute";
 const HOME = GLib.get_home_dir();
 const FETCHER = GLib.build_filenamev([HOME, ".local", "bin", "needle"]);
-const CONFIG = GLib.build_filenamev([GLib.get_user_config_dir(), "needle", "config.json"]);
+const CONFIG = GLib.getenv("NEEDLE_CONFIG") || GLib.build_filenamev([GLib.get_user_config_dir(), "needle", "config.json"]);
 
 const BAR_W = 300;          // must match .aiu-track width in stylesheet.css
 const BAR_H = 6;
 const STALE_ON_OPEN = 300;  // refresh on open if the snapshot is older than this (s)
-const PANEL_TAG = { claude: "C", codex: "X", zai: "Z" };
+const PANEL_TAG = { claude: "C", codex: "G", zai: "Z" };
 const PACE_WINDOWS = ["5-hour", "Weekly"]; // windows that decide "how much can I use right now"
+const SERVICES = [
+    { id: "claude", name: "Claude" },
+    { id: "codex", name: "ChatGPT / Codex" },
+    { id: "zai", name: "z.ai", keyUrl: "https://z.ai/manage-apikey/apikey-list" },
+    { id: "openrouter", name: "OpenRouter", keyUrl: "https://openrouter.ai/settings/keys" },
+];
 
 // ------------------------------------------------------------------ helpers
 
@@ -83,6 +91,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._busy = false;
         this._timerId = 0;
         this._fatal = null;
+        this._view = "usage";
+        this._dialog = null;
 
         this.set_applet_icon_symbolic_path(`${metadata.path}/icons/gauge-symbolic.svg`);
         this.set_applet_tooltip("Needle");
@@ -117,6 +127,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
     on_applet_removed_from_panel() {
         if (this._timerId) GLib.source_remove(this._timerId);
         this._timerId = 0;
+        if (this._dialog) this._dialog.close();
         this.settings.finalize();
     }
 
@@ -187,26 +198,6 @@ class AIUsageApplet extends Applet.TextIconApplet {
         const wrap = new St.BoxLayout({ vertical: true, style_class: "aiu-wrap" });
         this._content = new St.BoxLayout({ vertical: true, style_class: "aiu-content" });
         wrap.add(this._content);
-
-        const header = new St.BoxLayout({ style_class: "aiu-header" });
-        header.add(label("Needle", "aiu-title"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
-        this._updated = label("", "aiu-small", true);
-        header.add(this._updated, { y_fill: false, y_align: St.Align.MIDDLE });
-        this._content.add(header);
-
-        this._cards = new St.BoxLayout({ vertical: true });
-        this._content.add(this._cards);
-
-        const footer = new St.BoxLayout({ style_class: "aiu-footer" });
-        const keys = new St.Button({ label: "Edit keys", style_class: "aiu-btn", can_focus: true, track_hover: true });
-        keys.connect("clicked", () => { this.menu.close(); this._openConfig(); });
-        footer.add(keys);
-        footer.add(new St.Widget(), { expand: true });
-        this._refreshBtn = new St.Button({ label: "Refresh", style_class: "aiu-btn", can_focus: true, track_hover: true });
-        this._refreshBtn.connect("clicked", () => this._refresh(false));
-        footer.add(this._refreshBtn);
-        this._content.add(footer);
-
         this.menu.box.add(wrap);
     }
 
@@ -216,14 +207,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
             item.connect("activate", fn);
             this._applet_context_menu.addMenuItem(item);
         };
-        add("Refresh now (skip cooldowns)", () => this._refresh(true));
-        add("Edit API keys", () => this._openConfig());
-        add("Open in terminal (debug)", () => {
-            const cmd = `python3 '${FETCHER}' --text --debug --force; echo; read -p 'Press Enter to close'`;
-            if (GLib.find_program_in_path("gnome-terminal")) Util.spawn(["gnome-terminal", "--", "bash", "-c", cmd]);
-            else Util.spawn(["x-terminal-emulator", "-e", `bash -c "${cmd}"`]);
-        });
-        this._applet_context_menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        add("Open Needle", () => { this._view = "usage"; this._renderMenu(); this.menu.open(); });
     }
 
     _openConfig() {
@@ -231,9 +215,136 @@ class AIUsageApplet extends Applet.TextIconApplet {
         Util.spawn([editor, CONFIG]);
     }
 
+    _openDebug() {
+        const cmd = `python3 '${FETCHER}' --text --debug --force; echo; read -p 'Press Enter to close'`;
+        if (GLib.find_program_in_path("gnome-terminal")) Util.spawn(["gnome-terminal", "--", "bash", "-c", cmd]);
+        else Util.spawn(["x-terminal-emulator", "-e", `bash -c "${cmd}"`]);
+    }
+
+    _loadConfig() {
+        try {
+            const [, contents] = GLib.file_get_contents(CONFIG);
+            const parsed = JSON.parse(ByteArray.toString(contents));
+            return parsed && typeof parsed === "object" ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    _enabledServices() {
+        const config = this._loadConfig();
+        return SERVICES.filter((service) => config[service.id] && typeof config[service.id] === "object" && config[service.id].enabled !== false);
+    }
+
+    _providerConnected(provider) {
+        if (!provider) return false;
+        if (provider.connected !== undefined) return provider.connected === true;
+        return !!((provider.windows && provider.windows.length) || provider.balance);
+    }
+
+    _configureService(args, input, done, refresh) {
+        let proc;
+        try {
+            let flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE;
+            if (input !== null && input !== undefined) flags |= Gio.SubprocessFlags.STDIN_PIPE;
+            proc = Gio.Subprocess.new(["python3", FETCHER].concat(args), flags);
+        } catch (e) {
+            this._fatal = "Couldn't update Needle's settings.";
+            this._render();
+            return;
+        }
+        proc.communicate_utf8_async(input, null, (p, res) => {
+            let success = false;
+            try {
+                const [, , stderr] = p.communicate_utf8_finish(res);
+                success = p.get_successful();
+                if (!success) this._fatal = (stderr || "Couldn't update Needle's settings.").trim();
+                else this._fatal = null;
+            } catch (e) {
+                this._fatal = "Couldn't update Needle's settings.";
+            }
+            if (done) done(success);
+            this._render();
+            if (success && refresh !== false) this._refresh(true);
+        });
+    }
+
+    _showDialog(title, message, buttons, entry) {
+        if (this._dialog) this._dialog.close();
+        const dialog = new ModalDialog.ModalDialog();
+        this._dialog = dialog;
+        dialog.contentLayout.add(label(title, "aiu-title"));
+        const note = this._note(message, false);
+        dialog.contentLayout.add(note);
+        let input = null;
+        if (entry) {
+            input = new St.Entry({ style_class: "aiu-key-entry", can_focus: true, hint_text: "API key" });
+            input.clutter_text.set_password_char("●");
+            dialog.contentLayout.add(input);
+        }
+        dialog.setButtons(buttons.map((button) => ({
+            label: button.label,
+            action: () => {
+                const value = input ? input.get_text().trim() : null;
+                if (button.keepOpen && button.action) {
+                    button.action(value);
+                    return;
+                }
+                dialog.close();
+                this._dialog = null;
+                if (button.action) button.action(value);
+            },
+            key: button.key,
+        })));
+        dialog.open();
+        if (input) global.stage.set_key_focus(input.clutter_text);
+    }
+
+    _addService(service, replaceKey) {
+        const config = this._loadConfig();
+        const hasKey = config[service.id] && config[service.id].api_key;
+        if (!service.keyUrl || (hasKey && !replaceKey)) {
+            this._configureService(["--enable-service", service.id], null);
+            return;
+        }
+        this._showDialog(
+            `Add ${service.name}`,
+            `Paste your ${service.name} API key. It is saved only on this computer.`,
+            [
+                { label: "Get a key", keepOpen: true, action: () => Util.spawn(["xdg-open", service.keyUrl]) },
+                { label: "Cancel", key: Clutter.KEY_Escape },
+                { label: "Add", action: (key) => {
+                    if (key) this._configureService(["--set-service-key", service.id], key);
+                } },
+            ],
+            true
+        );
+    }
+
+    _removeService(service) {
+        if (!service.keyUrl) {
+            this._configureService(["--disable-service", service.id], null);
+            return;
+        }
+        this._showDialog(
+            `Remove ${service.name}?`,
+            "You can keep the saved API key for an easier reconnect, or delete it from Needle.",
+            [
+                { label: "Cancel", key: Clutter.KEY_Escape },
+                { label: "Keep key", action: () => this._configureService(["--disable-service", service.id], null) },
+                { label: "Delete key", action: () => {
+                    this._configureService(["--clear-service-key", service.id], null, () => {
+                        this._configureService(["--disable-service", service.id], null);
+                    }, false);
+                } },
+            ],
+            false
+        );
+    }
+
     _setBusy(busy) {
         if (!this._refreshBtn) return;
-        this._refreshBtn.label = busy ? "Refreshing…" : "Refresh";
+        if (this._refreshBtn._nameLabel) this._refreshBtn._nameLabel.text = busy ? "Refreshing…" : "Refresh";
         this._refreshBtn.reactive = !busy;
     }
 
@@ -245,7 +356,10 @@ class AIUsageApplet extends Applet.TextIconApplet {
     }
 
     _renderPanel() {
-        const providers = (this._data && this._data.providers) || [];
+        const enabled = this._enabledServices().map((service) => service.id);
+        const providers = ((this._data && this._data.providers) || []).filter(
+            (provider) => enabled.indexOf(provider.id) !== -1 && this._providerConnected(provider)
+        );
         const parts = [];
         const tips = [];
         let worst = "ok";
@@ -287,20 +401,147 @@ class AIUsageApplet extends Applet.TextIconApplet {
     }
 
     _renderMenu() {
-        if (!this._cards) return;
-        this._cards.get_children().forEach((c) => c.destroy());
-        this._updated.text = this._data && this._data.updated ? `Updated ${ago(this._data.updated)}` : "";
+        if (!this._content) return;
+        this._content.get_children().forEach((child) => child.destroy());
+        this._refreshBtn = null;
+        if (this._view === "add") this._renderAddView();
+        else if (this._view === "settings") this._renderSettingsView();
+        else this._renderUsageView();
+    }
+
+    _header(title, back) {
+        const header = new St.BoxLayout({ style_class: "aiu-header" });
+        if (back) {
+            const backButton = new St.Button({ label: "←", style_class: "aiu-icon-btn", can_focus: true, track_hover: true });
+            backButton.connect("clicked", () => { this._view = "usage"; this._renderMenu(); });
+            header.add(backButton, { y_fill: false, y_align: St.Align.MIDDLE });
+        }
+        header.add(label(title, "aiu-title"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
+        if (!back) {
+            const updated = this._data && this._data.updated ? `Updated ${ago(this._data.updated)}` : "";
+            header.add(label(updated, "aiu-small", true), { y_fill: false, y_align: St.Align.MIDDLE });
+            const close = new St.Button({ label: "×", style_class: "aiu-icon-btn", can_focus: true, track_hover: true });
+            close.connect("clicked", () => this.menu.close());
+            header.add(close, { y_fill: false, y_align: St.Align.MIDDLE });
+        }
+        this._content.add(header);
+    }
+
+    _navButton(text, style, action) {
+        const button = new St.Button({ label: text, style_class: style, can_focus: true, track_hover: true });
+        button.connect("clicked", action);
+        this._content.add(button);
+        return button;
+    }
+
+    _renderUsageView() {
+        this._header("Needle", false);
+        const cards = new St.BoxLayout({ vertical: true });
+        this._content.add(cards);
 
         if (this._fatal) {
-            this._cards.add(this._note(this._fatal, true));
-            return;
+            cards.add(this._note(this._fatal, true));
         }
-        const providers = (this._data && this._data.providers) || [];
+        const enabled = this._enabledServices();
+        const enabledIds = enabled.map((service) => service.id);
+        const providers = ((this._data && this._data.providers) || []).filter(
+            (provider) => enabledIds.indexOf(provider.id) !== -1 && this._providerConnected(provider)
+        );
         if (!providers.length) {
-            this._cards.add(this._note("Nothing to show yet. Add your keys with Edit keys, then press Refresh.", false));
+            const empty = new St.BoxLayout({ vertical: true, style_class: "aiu-empty" });
+            empty.add(label("No services connected yet.", "aiu-empty-title"), { x_align: St.Align.MIDDLE });
+            const add = new St.Button({ label: "+  Add more", style_class: "aiu-add-large", can_focus: true, track_hover: true });
+            add.connect("clicked", () => { this._view = "add"; this._renderMenu(); });
+            empty.add(add, { x_align: St.Align.MIDDLE });
+            cards.add(empty);
+        } else {
+            providers.forEach((p) => cards.add(this._card(p)));
+            if (providers.length < SERVICES.length) {
+                this._navButton("+  Add more", "aiu-nav-btn", () => { this._view = "add"; this._renderMenu(); });
+            }
+        }
+        this._navButton("Settings", "aiu-nav-btn aiu-settings-btn", () => { this._view = "settings"; this._renderMenu(); });
+    }
+
+    _renderAddView() {
+        this._header("Add more", true);
+        const config = this._loadConfig();
+        const providerList = (this._data && this._data.providers) || [];
+        const providers = {};
+        providerList.forEach((provider) => { providers[provider.id] = provider; });
+        const available = SERVICES.filter((service) => {
+            const section = config[service.id];
+            const enabled = section && typeof section === "object" && section.enabled !== false;
+            return !enabled || !this._providerConnected(providers[service.id]);
+        });
+        if (!available.length) {
+            this._content.add(this._note("All supported services are connected.", false));
             return;
         }
-        providers.forEach((p) => this._cards.add(this._card(p)));
+        available.forEach((service) => {
+            const section = config[service.id] && typeof config[service.id] === "object" ? config[service.id] : {};
+            const enabled = section.enabled !== false && !!config[service.id];
+            const hasKey = !!section.api_key;
+            const provider = providers[service.id];
+            let text = `+  ${service.name}`;
+            let action = () => this._addService(service);
+            if (enabled && service.keyUrl && !hasKey) {
+                text = `Add ${service.name} key`;
+                action = () => this._addService(service, true);
+            } else if (enabled) {
+                text = `Retry ${service.name}`;
+                action = () => this._configureService(["--enable-service", service.id], null);
+            }
+            this._navButton(text, "aiu-service-btn", action);
+            if (provider && provider.error) this._content.add(this._note(provider.error, true));
+            if (enabled && service.keyUrl && hasKey && provider && provider.error) {
+                this._navButton(`Change ${service.name} key`, "aiu-service-btn", () => this._addService(service, true));
+            }
+        });
+    }
+
+    _settingRow(name, value, action, destructive) {
+        const row = new St.Button({ style_class: destructive ? "aiu-setting-row aiu-danger" : "aiu-setting-row", can_focus: true, track_hover: true });
+        const box = new St.BoxLayout({ style_class: "aiu-row" });
+        row._nameLabel = label(name, "aiu-label");
+        box.add(row._nameLabel, { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
+        if (value) box.add(label(value, "aiu-small", true), { y_fill: false, y_align: St.Align.MIDDLE });
+        row.set_child(box);
+        row.connect("clicked", action);
+        this._content.add(row);
+        return row;
+    }
+
+    _renderSettingsView() {
+        this._header("Settings", true);
+        this._content.add(label("SERVICES", "aiu-section-label", true));
+        this._enabledServices().forEach((service) => {
+            if (service.keyUrl) this._settingRow(`Change ${service.name} key`, "", () => this._addService(service, true));
+            this._settingRow(`Remove ${service.name}`, "", () => this._removeService(service), true);
+        });
+
+        this._content.add(label("DISPLAY", "aiu-section-label", true));
+        const intervals = [0, 5, 10, 15, 30, 60];
+        this._settingRow("Auto-refresh", this.refreshMinutes ? `${this.refreshMinutes} min` : "Off", () => {
+            const current = intervals.indexOf(this.refreshMinutes);
+            this.refreshMinutes = intervals[(current + 1) % intervals.length];
+            this._renderMenu();
+        });
+        this._settingRow("Panel display", this.panelStyle === "icon" ? "Icon only" : "Percentages", () => {
+            this.panelStyle = this.panelStyle === "icon" ? "compact" : "icon";
+            this._render();
+        });
+        this._settingRow("Usage values", this.showRemaining ? "Remaining" : "Used", () => {
+            this.showRemaining = !this.showRemaining;
+            this._render();
+        });
+
+        this._content.add(label("UTILITIES", "aiu-section-label", true));
+        this._refreshBtn = this._settingRow("Refresh", "", () => this._refresh(false));
+        this._settingRow("Refresh (skip cooldowns)", "", () => this._refresh(true));
+        this._settingRow("Open raw configuration", "", () => { this.menu.close(); this._openConfig(); });
+        this._settingRow("Debug in terminal", "", () => { this.menu.close(); this._openDebug(); });
+        this._setBusy(this._busy);
     }
 
     _card(p) {

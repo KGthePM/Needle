@@ -4,9 +4,11 @@
 .aiu-wrap { padding: 4px 10px 2px; }
 .aiu-content { width: 300px; }
 
-.aiu-header { padding-bottom: 4px; }
+.aiu-header { padding-bottom: 6px; spacing: 6px; }
 .aiu-title { font-weight: bold; font-size: 1.05em; }
 .aiu-small { font-size: 0.85em; }
+.aiu-icon-btn { padding: 2px 7px; border-radius: 5px; font-size: 1.1em; }
+.aiu-icon-btn:hover, .aiu-icon-btn:focus { background-color: rgba(128, 128, 128, 0.22); }
 
 .aiu-card { padding: 12px 0 10px; border-top: 1px solid rgba(128, 128, 128, 0.2); }
 .aiu-card-head { spacing: 8px; padding-bottom: 6px; }
@@ -39,6 +41,29 @@
 
 .aiu-note { font-size: 0.85em; padding-top: 6px; }
 .aiu-note-error { color: #e06464; }
+
+.aiu-empty { padding: 28px 8px 30px; spacing: 16px; }
+.aiu-empty-title { font-size: 0.95em; }
+.aiu-add-large {
+  padding: 12px 28px;
+  border-radius: 9px;
+  font-weight: bold;
+  background-color: rgba(52, 197, 138, 0.2);
+}
+.aiu-add-large:hover, .aiu-add-large:focus { background-color: rgba(52, 197, 138, 0.34); }
+
+.aiu-nav-btn, .aiu-service-btn, .aiu-setting-row {
+  padding: 9px 10px;
+  border-top: 1px solid rgba(128, 128, 128, 0.18);
+  text-align: left;
+}
+.aiu-nav-btn:hover, .aiu-nav-btn:focus,
+.aiu-service-btn:hover, .aiu-service-btn:focus,
+.aiu-setting-row:hover, .aiu-setting-row:focus { background-color: rgba(128, 128, 128, 0.16); }
+.aiu-settings-btn { margin-top: 2px; }
+.aiu-section-label { padding: 12px 8px 4px; font-size: 0.72em; font-weight: bold; }
+.aiu-danger { color: #e06464; }
+.aiu-key-entry { padding: 7px 9px; margin-top: 10px; min-width: 280px; }
 
 .aiu-footer { spacing: 6px; padding-top: 10px; border-top: 1px solid rgba(128, 128, 128, 0.2); }
 .aiu-btn {

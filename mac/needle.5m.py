@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.1</xbar.version>
+# <xbar.version>v0.4.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
-# <xbar.desc>Claude, Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
+# <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
@@ -21,7 +21,8 @@ import time
 from pathlib import Path
 
 FETCHER = Path.home() / ".local" / "bin" / "needle"
-CONFIG = Path.home() / ".config" / "needle" / "config.json"
+CONFIG = Path(os.environ.get("NEEDLE_CONFIG") or
+              Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "needle" / "config.json").expanduser()
 PY = sys.executable or "/usr/bin/python3"
 PLUGIN = Path(__file__).resolve()
 # Providers whose key can be pasted from the menu: (name, where to get one, dialog hint).
@@ -31,6 +32,13 @@ KEY_SETUP = {
                    "Paste an OpenRouter key. A management key shows your whole balance; "
                    "a regular key shows that key's own limit."),
 }
+SERVICES = (
+    ("claude", "Claude"),
+    ("codex", "ChatGPT / Codex"),
+    ("zai", "z.ai"),
+    ("openrouter", "OpenRouter"),
+)
+SERVICE_NAMES = dict(SERVICES)
 GET_KEY = "__get_key__"
 
 # Rows with no action are drawn disabled, and macOS greys out their colors. A no-op
@@ -42,7 +50,7 @@ SMALL = {"size": "11", "color": "#86868b"}
 # white), and it ignores sfcolor on symbols, so provider dots are emoji instead.
 INK = {"ok": 32, "warn": 33, "crit": 31, "dim": None}  # green, yellow, red, default text
 DOT = {"claude": "🟠", "codex": "⚫", "zai": "🔵", "openrouter": "🟣"}
-PANEL_TAG = {"claude": "C", "codex": "X", "zai": "Z"}
+PANEL_TAG = {"claude": "C", "codex": "G", "zai": "Z"}
 PACE_WINDOWS = ("5-hour", "Weekly")
 PACE = {"fast": ("▲ fast", "warn"), "even": ("● on pace", "dim"), "slow": ("▼ plenty", "ok")}
 CELLS = 16
@@ -115,6 +123,36 @@ def load():
         return json.loads(out.stdout), None
     except ValueError:
         return None, "Couldn't read the fetcher's output. Open Debug in Terminal to check it."
+
+
+def load_config():
+    """Read service state without trusting stale fetcher output or malformed settings."""
+    try:
+        config = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+    except (OSError, ValueError):
+        return {}
+    return config if isinstance(config, dict) else {}
+
+
+def service_state(config):
+    enabled, keys = set(), set()
+    for pid, _ in SERVICES:
+        section = config.get(pid)
+        if not isinstance(section, dict):
+            continue
+        if section.get("enabled", True) is True:
+            enabled.add(pid)
+        if isinstance(section.get("api_key"), str) and section["api_key"].strip():
+            keys.add(pid)
+    return enabled, keys
+
+
+def provider_connected(provider):
+    if not isinstance(provider, dict):
+        return False
+    if "connected" in provider:
+        return provider["connected"] is True
+    return bool(provider.get("windows") or provider.get("balance"))
 
 
 # ------------------------------------------------------------------ rendering
@@ -203,6 +241,28 @@ def set_key_action(pid):
             "terminal": False, "refresh": True}
 
 
+def add_key_action(pid):
+    return {"bash": PY, "param1": str(PLUGIN), "param2": "--add-service", "param3": pid,
+            "terminal": False, "refresh": True}
+
+
+def fetcher_action(command, pid):
+    return {"bash": PY, "param1": str(FETCHER), "param2": command, "param3": pid,
+            "terminal": False, "refresh": True}
+
+
+def force_refresh_action():
+    return {"bash": PY, "param1": str(FETCHER), "param2": "--force",
+            "terminal": False, "refresh": True}
+
+
+def remove_action(pid, has_key):
+    if pid in KEY_SETUP and has_key:
+        return {"bash": PY, "param1": str(PLUGIN), "param2": "--remove-service", "param3": pid,
+                "terminal": False, "refresh": True}
+    return fetcher_action("--disable-service", pid)
+
+
 def render_unset(providers):
     """One line per provider that just needs a key, instead of a section each."""
     for p in providers:
@@ -210,18 +270,50 @@ def render_unset(providers):
         item(f"{dot} Add {p['name']} key…", tooltip="Opens a box to paste your key", **set_key_action(p["id"]))
 
 
-def render_actions(data):
-    sep()
+def render_add_services(connected, enabled, stored_keys, providers, prominent=False):
+    label = "＋ Add more…" if prominent else "＋ Add more"
+    item(label, size="13" if prominent else None, sfimage="plus.circle")
+    available = [(pid, name) for pid, name in SERVICES if pid not in connected]
+    if not available:
+        item("--All services are connected", **SMALL)
+        return
+    for pid, name in available:
+        provider = providers.get(pid, {})
+        error = provider.get("error") if isinstance(provider, dict) else None
+        if pid not in enabled:
+            needs_key = pid in KEY_SETUP and pid not in stored_keys
+            action = add_key_action(pid) if needs_key else fetcher_action("--enable-service", pid)
+            item(f"--{name}", **action)
+            continue
+
+        item(f"--{name}")
+        if error:
+            item(f"----{error}", **SMALL)
+        if pid in KEY_SETUP and pid not in stored_keys:
+            item("----Add key…", **set_key_action(pid))
+            continue
+        item("----Retry", **force_refresh_action())
+        if pid in KEY_SETUP:
+            item("----Change key…", **set_key_action(pid))
+
+
+def render_settings(data, enabled, stored_keys):
+    item("Settings", sfimage="gearshape")
+    if enabled:
+        item("--Services")
+        for pid, name in SERVICES:
+            if pid not in enabled:
+                continue
+            item(f"----{name}")
+            if pid in KEY_SETUP:
+                item("------Change key…", **set_key_action(pid))
+            item("------Remove…", **remove_action(pid, pid in stored_keys))
     if data and data.get("updated"):
-        item(f"Updated {ago(data['updated'])}", **SMALL)
-    item("Refresh", refresh=True, sfimage="arrow.clockwise")
-    item("Edit keys", sfimage="key")
-    for pid, (name, _, _) in KEY_SETUP.items():
-        item(f"--Set {name} key…", **set_key_action(pid))
-    item("--Open keys file", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
-    item("More", sfimage="ellipsis.circle")
+        item(f"--Updated {ago(data['updated'])}", **SMALL)
+    item("--Refresh", refresh=True, sfimage="arrow.clockwise")
     item("--Refresh now (skip cooldowns)", bash=PY, param1=str(FETCHER), param2="--force",
          terminal=False, refresh=True)
+    item("--Open raw config", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
     item("--Debug in Terminal", bash=PY, param1=str(FETCHER), param2="--text", param3="--debug",
          param4="--force", terminal=True)
 
@@ -257,61 +349,93 @@ def ask_key(pid):
         subprocess.run(["/usr/bin/open", url])
 
 
+def run_config_command(command, pid, key=None):
+    try:
+        out = subprocess.run(
+            [PY, str(FETCHER), command, pid], input=key, capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        alert("Needle couldn't update the service settings. Try again, or open Debug in Terminal.")
+        return False
+    if out.returncode:
+        alert(out.stderr.strip() or "Needle couldn't update the service settings.")
+        return False
+    return True
+
+
 def set_key(pid):
     if pid not in KEY_SETUP:
         return
     key = ask_key(pid)
     if not key:
         return
-    try:
-        cfg = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
-    except ValueError:
-        alert("The keys file has a formatting error, so the key wasn't saved. It will open now so you can fix it.")
-        subprocess.run(["/usr/bin/open", "-t", str(CONFIG)])
+    if not run_config_command("--set-service-key", pid, key):
         return
-    section = cfg.setdefault(pid, {})
-    section["api_key"] = key
-    section["enabled"] = True
-    CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CONFIG.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(cfg, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, CONFIG)
     # Fetch now so the menu shows the new numbers (or the key's error) as soon as it refreshes.
     subprocess.run([PY, str(FETCHER), "--force"], capture_output=True, timeout=90)
+
+
+def remove_service(pid):
+    if pid not in KEY_SETUP:
+        return
+    _, stored_keys = service_state(load_config())
+    delete_key = False
+    if pid in stored_keys:
+        name = SERVICE_NAMES[pid]
+        prompt = f"Remove {name} from Needle?\n\nKeep its stored API key to make it easier to add again later."
+        script = (
+            f"set r to display dialog {json.dumps(prompt)} with title \"Remove service\" "
+            f"buttons {{\"Cancel\", \"Delete key\", \"Keep key\"}} default button \"Keep key\" "
+            f"cancel button \"Cancel\"\nreturn button returned of r"
+        )
+        out = osascript(script)
+        if out.returncode != 0:
+            return
+        delete_key = out.stdout.strip() == "Delete key"
+    if not run_config_command("--disable-service", pid):
+        return
+    if delete_key:
+        run_config_command("--clear-service-key", pid)
 
 
 def main():
     if sys.argv[1:2] == ["--set-key"] and len(sys.argv) > 2:
         set_key(sys.argv[2])
         return
+    if sys.argv[1:2] == ["--add-service"] and len(sys.argv) > 2:
+        set_key(sys.argv[2])
+        return
+    if sys.argv[1:2] == ["--remove-service"] and len(sys.argv) > 2:
+        remove_service(sys.argv[2])
+        return
+
+    config = load_config()
+    enabled, stored_keys = service_state(config)
     data, fatal = load()
-    providers = (data or {}).get("providers", [])
+    raw_providers = (data or {}).get("providers", [])
+    provider_map = {p.get("id"): p for p in raw_providers if isinstance(p, dict) and p.get("id")}
+    providers = [p for p in raw_providers
+                 if isinstance(p, dict) and p.get("id") in enabled and provider_connected(p)]
+    connected = {p["id"] for p in providers}
     render_title(providers)
     sep()
 
-    if fatal:
-        item(fatal, **SMALL)
-    elif not providers:
-        item("Nothing to show yet. Add your keys with Edit keys, then Refresh.", **SMALL)
-    else:
-        shown = [p for p in providers if not p.get("needs_key")]
-        unset = [p for p in providers if p.get("needs_key")]
-        labels = [w["label"] for p in shown for w in p.get("windows", [])]
-        labels += [p["balance"].get("label", "Credits") for p in shown if p.get("balance")]
+    if providers:
+        if fatal:
+            item(fatal, **SMALL)
+        labels = [w["label"] for p in providers for w in p.get("windows", [])]
+        labels += [p["balance"].get("label", "Credits") for p in providers if p.get("balance")]
         width = max(map(len, labels), default=8) + 2
-        for i, p in enumerate(shown):
+        for i, p in enumerate(providers):
             if i:
                 sep()
             render_provider(p, width)
-        if unset:
-            if shown:
-                sep()
-            render_unset(unset)
+        sep()
+    elif fatal:
+        item(fatal, **SMALL)
 
-    render_actions(data)
+    render_add_services(connected, enabled, stored_keys, provider_map, prominent=not connected)
+    render_settings(data, enabled, stored_keys)
 
 
 if __name__ == "__main__":
