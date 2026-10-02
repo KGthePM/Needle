@@ -24,6 +24,30 @@ const BAR_H = 6;
 const STALE_ON_OPEN = 300;  // refresh on open if the snapshot is older than this (s)
 const PANEL_TAG = { claude: "C", codex: "G", zai: "Z" };
 const PACE_WINDOWS = ["5-hour", "Weekly"]; // windows that decide "how much can I use right now"
+const THEME_MODES = [
+    { id: "light", name: "Light" },
+    { id: "system", name: "System" },
+    { id: "dark", name: "Dark" },
+    { id: "night", name: "Night" },
+    { id: "custom", name: "Custom" },
+];
+const CUSTOM_COLORS = [
+    ["theme-background", "themeBackground", "background"],
+    ["theme-surface", "themeSurface", "surface"],
+    ["theme-text", "themeText", "text"],
+    ["theme-muted", "themeMuted", "muted"],
+    ["theme-border", "themeBorder", "border"],
+    ["theme-accent", "themeAccent", "accent"],
+    ["theme-hover", "themeHover", "hover"],
+    ["theme-track", "themeTrack", "track"],
+    ["theme-success", "themeSuccess", "success"],
+    ["theme-warning", "themeWarning", "warning"],
+    ["theme-critical", "themeCritical", "critical"],
+    ["theme-claude", "themeClaude", "claude"],
+    ["theme-codex", "themeCodex", "codex"],
+    ["theme-zai", "themeZai", "zai"],
+    ["theme-openrouter", "themeOpenrouter", "openrouter"],
+];
 const SERVICES = [
     { id: "claude", name: "Claude" },
     { id: "codex", name: "ChatGPT / Codex" },
@@ -93,6 +117,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._fatal = null;
         this._view = "usage";
         this._dialog = null;
+        this._instanceId = instanceId;
 
         this.set_applet_icon_symbolic_path(`${metadata.path}/icons/gauge-symbolic.svg`);
         this.set_applet_tooltip("Needle");
@@ -102,6 +127,10 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this.settings.bind("refresh-minutes", "refreshMinutes", () => this._schedule());
         this.settings.bind("panel-style", "panelStyle", () => this._render());
         this.settings.bind("show-remaining", "showRemaining", () => this._render());
+        this.settings.bind("theme-mode", "themeMode", () => this._themeChanged());
+        CUSTOM_COLORS.forEach((setting) => {
+            this.settings.bind(setting[0], setting[1], () => this._themeChanged());
+        });
 
         this.menuManager = new PopupMenu.PopupMenuManager(this);
         this.menu = new Applet.AppletPopupMenu(this, orientation);
@@ -196,9 +225,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
 
     _buildMenu() {
         const wrap = new St.BoxLayout({ vertical: true, style_class: "aiu-wrap" });
+        this._wrap = wrap;
         this._content = new St.BoxLayout({ vertical: true, style_class: "aiu-content" });
         wrap.add(this._content);
         this.menu.box.add(wrap);
+        this._applyTheme();
     }
 
     _buildContextMenu() {
@@ -219,6 +250,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
         const cmd = `python3 '${FETCHER}' --text --debug --force; echo; read -p 'Press Enter to close'`;
         if (GLib.find_program_in_path("gnome-terminal")) Util.spawn(["gnome-terminal", "--", "bash", "-c", cmd]);
         else Util.spawn(["x-terminal-emulator", "-e", `bash -c "${cmd}"`]);
+    }
+
+    _openThemeSettings() {
+        this.menu.close();
+        Util.spawn(["xlet-settings", "applet", UUID, "-i", String(this._instanceId)]);
     }
 
     _loadConfig() {
@@ -406,14 +442,19 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._refreshBtn = null;
         if (this._view === "add") this._renderAddView();
         else if (this._view === "settings") this._renderSettingsView();
+        else if (this._view === "theme") this._renderThemeView();
         else this._renderUsageView();
+        this._applyTheme();
     }
 
     _header(title, back) {
         const header = new St.BoxLayout({ style_class: "aiu-header" });
         if (back) {
             const backButton = new St.Button({ label: "←", style_class: "aiu-icon-btn", can_focus: true, track_hover: true });
-            backButton.connect("clicked", () => { this._view = "usage"; this._renderMenu(); });
+            backButton.connect("clicked", () => {
+                this._view = typeof back === "string" ? back : "usage";
+                this._renderMenu();
+            });
             header.add(backButton, { y_fill: false, y_align: St.Align.MIDDLE });
         }
         header.add(label(title, "aiu-title"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
@@ -535,6 +576,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
             this.showRemaining = !this.showRemaining;
             this._render();
         });
+        const mode = THEME_MODES.find((item) => item.id === this.themeMode) || THEME_MODES[1];
+        this._settingRow("Theme", mode.name, () => {
+            this._view = "theme";
+            this._renderMenu();
+        });
 
         this._content.add(label("UTILITIES", "aiu-section-label", true));
         this._refreshBtn = this._settingRow("Refresh", "", () => this._refresh(false));
@@ -542,6 +588,84 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._settingRow("Open raw configuration", "", () => { this.menu.close(); this._openConfig(); });
         this._settingRow("Debug in terminal", "", () => { this.menu.close(); this._openDebug(); });
         this._setBusy(this._busy);
+    }
+
+    _renderThemeView() {
+        this._header("Theme", "settings");
+        this._content.add(label("APPEARANCE", "aiu-section-label", true));
+        THEME_MODES.forEach((mode) => {
+            const selected = this.themeMode === mode.id;
+            const row = this._settingRow(mode.name, selected ? "Selected" : "", () => {
+                this.themeMode = mode.id;
+                this._render();
+            });
+            row.add_style_class_name("aiu-theme-choice");
+            if (selected) row.add_style_class_name("aiu-theme-choice-selected");
+        });
+        this._content.add(label("CUSTOM", "aiu-section-label", true));
+        this._settingRow("Edit custom palette", "", () => this._openThemeSettings());
+    }
+
+    _themeChanged() {
+        if (this._content) this._render();
+    }
+
+    _customPalette() {
+        const palette = {};
+        CUSTOM_COLORS.forEach((setting) => { palette[setting[2]] = this[setting[1]]; });
+        return palette;
+    }
+
+    _customActorStyle(actor, palette, active) {
+        const classes = (actor.get_style_class_name && actor.get_style_class_name() || "").split(/\s+/);
+        const has = (name) => classes.indexOf(name) !== -1;
+        const rules = [];
+        if (has("aiu-wrap")) rules.push(`background-color: ${palette.background}`, `color: ${palette.text}`, `border-color: ${palette.border}`);
+        if (has("aiu-card")) rules.push(`background-color: ${palette.surface}`, `border-color: ${palette.border}`);
+        if (has("aiu-small") || has("aiu-section-label") || has("aiu-note")) rules.push(`color: ${palette.muted}`);
+        if (has("aiu-nav-btn") || has("aiu-service-btn") || has("aiu-setting-row") || has("aiu-icon-btn")) {
+            rules.push(`color: ${palette.text}`, `border-color: ${palette.border}`, `background-color: ${active ? palette.hover : "transparent"}`);
+        }
+        if (has("aiu-theme-choice-selected") || has("aiu-add-large")) rules.push(`color: ${palette.accent}`);
+        if (has("aiu-add-large")) rules.push(`background-color: ${active ? palette.hover : palette.surface}`);
+        if (has("aiu-key-entry")) rules.push(`background-color: ${palette.surface}`, `color: ${palette.text}`, `border-color: ${palette.border}`);
+        if (has("aiu-track")) rules.push(`background-color: ${palette.track}`);
+        if (has("aiu-fill-ok")) rules.push(`background-color: ${palette.success}`);
+        if (has("aiu-fill-warn")) rules.push(`background-color: ${palette.warning}`);
+        if (has("aiu-fill-crit")) rules.push(`background-color: ${palette.critical}`);
+        if (has("aiu-note-error") || has("aiu-danger")) rules.push(`color: ${palette.critical}`);
+        if (has("aiu-tick")) rules.push(`background-color: ${palette.muted}`);
+        if (has("aiu-dot-claude")) rules.push(`background-color: ${palette.claude}`);
+        if (has("aiu-dot-codex")) rules.push(`background-color: ${palette.codex}`);
+        if (has("aiu-dot-zai")) rules.push(`background-color: ${palette.zai}`);
+        if (has("aiu-dot-openrouter")) rules.push(`background-color: ${palette.openrouter}`);
+        return rules.length ? `${rules.join("; ")};` : null;
+    }
+
+    _applyTheme() {
+        if (!this._wrap) return;
+        const mode = THEME_MODES.some((item) => item.id === this.themeMode) ? this.themeMode : "system";
+        this._wrap.set_style_class_name(`aiu-wrap${mode === "system" ? "" : ` aiu-theme-${mode}`}`);
+        this._wrap.set_style(null);
+        if (mode !== "custom") return;
+
+        const palette = this._customPalette();
+        const visit = (actor) => {
+            if (actor instanceof St.Widget) {
+                const update = () => {
+                    const active = actor instanceof St.Button && (actor.hover || (actor.has_key_focus && actor.has_key_focus()));
+                    actor.set_style(this._customActorStyle(actor, palette, active));
+                };
+                update();
+                if (actor instanceof St.Button) {
+                    actor.connect("notify::hover", update);
+                    actor.connect("key-focus-in", update);
+                    actor.connect("key-focus-out", update);
+                }
+            }
+            actor.get_children().forEach(visit);
+        };
+        visit(this._wrap);
     }
 
     _card(p) {

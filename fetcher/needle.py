@@ -14,6 +14,7 @@ import base64
 import binascii
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -28,7 +29,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "0.4.0"
+VERSION = "0.6.1"
 TIMEOUT = 10
 
 
@@ -418,6 +419,39 @@ PROVIDERS = [
 ]
 PROVIDER_IDS = {provider[0] for provider in PROVIDERS}
 KEY_PROVIDERS = {"zai", "openrouter"}
+TRAY_HOVER_PERCENTAGE_MODES = {"hourly", "weekly", "both"}
+WINDOWS_THEME_MODES = {"light", "system", "dark", "night", "custom"}
+WINDOWS_THEME_COLOR_ROLES = {
+    "background",
+    "surface",
+    "text",
+    "muted",
+    "border",
+    "accent",
+    "hover",
+    "track",
+    "success",
+    "warning",
+    "critical",
+    "claude",
+    "codex",
+    "zai",
+    "openrouter",
+}
+HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def load_config_for_update():
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as err:
+            raise ValueError("The settings file could not be read; fix it before changing settings.") from err
+    else:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        raise ValueError("The settings file does not contain a JSON object.")
+    return cfg
 
 
 def configure_service(provider, enabled=None, api_key=None, clear_key=False):
@@ -426,15 +460,7 @@ def configure_service(provider, enabled=None, api_key=None, clear_key=False):
         raise ValueError(f"Unknown service: {provider}")
     if api_key is not None and provider not in KEY_PROVIDERS:
         raise ValueError(f"{provider} does not use an API key")
-    if CONFIG_PATH.exists():
-        try:
-            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError) as err:
-            raise ValueError("The settings file could not be read; fix it before changing services.") from err
-    else:
-        cfg = {}
-    if not isinstance(cfg, dict):
-        raise ValueError("The settings file does not contain a JSON object.")
+    cfg = load_config_for_update()
     section = cfg.get(provider)
     if not isinstance(section, dict):
         section = {}
@@ -449,6 +475,56 @@ def configure_service(provider, enabled=None, api_key=None, clear_key=False):
     write_json(CONFIG_PATH, cfg)
 
 
+def configure_tray_hover_percentage_mode(mode):
+    if mode not in TRAY_HOVER_PERCENTAGE_MODES:
+        raise ValueError(f"Unknown tray hover percentage mode: {mode}")
+    cfg = load_config_for_update()
+    section = cfg.get("windows")
+    if not isinstance(section, dict):
+        section = {}
+        cfg["windows"] = section
+    section["tray_hover_percentage_mode"] = mode
+    write_json(CONFIG_PATH, cfg)
+
+
+def configure_windows_theme(mode):
+    if mode not in WINDOWS_THEME_MODES:
+        raise ValueError(f"Unknown Windows theme: {mode}")
+    cfg = load_config_for_update()
+    section = cfg.get("windows")
+    if not isinstance(section, dict):
+        section = {}
+        cfg["windows"] = section
+    section["theme"] = mode
+    write_json(CONFIG_PATH, cfg)
+
+
+def configure_windows_custom_theme(palette):
+    if not isinstance(palette, dict):
+        raise ValueError("The custom theme must be a JSON object.")
+    roles = set(palette)
+    missing = sorted(WINDOWS_THEME_COLOR_ROLES - roles)
+    unknown = sorted(roles - WINDOWS_THEME_COLOR_ROLES)
+    if missing:
+        raise ValueError(f"The custom theme is missing colors: {', '.join(missing)}")
+    if unknown:
+        raise ValueError(f"The custom theme has unknown colors: {', '.join(unknown)}")
+    invalid = sorted(
+        role for role, color in palette.items()
+        if not isinstance(color, str) or not HEX_COLOR.fullmatch(color)
+    )
+    if invalid:
+        raise ValueError(f"The custom theme has invalid colors: {', '.join(invalid)}")
+    cfg = load_config_for_update()
+    section = cfg.get("windows")
+    if not isinstance(section, dict):
+        section = {}
+        cfg["windows"] = section
+    section["custom_theme"] = {role: palette[role].lower() for role in sorted(palette)}
+    section["theme"] = "custom"
+    write_json(CONFIG_PATH, cfg)
+
+
 def run_config_command(argv):
     """Handle service mutations. Return None when argv is a normal fetch command."""
     commands = {
@@ -456,6 +532,9 @@ def run_config_command(argv):
         "--disable-service": "disable",
         "--set-service-key": "set-key",
         "--clear-service-key": "clear-key",
+        "--set-tray-hover-percentage-mode": "tray-hover-percentage-mode",
+        "--set-windows-theme": "windows-theme",
+        "--set-windows-custom-theme": "windows-custom-theme",
     }
     selected = [(flag, action) for flag, action in commands.items() if flag in argv]
     if not selected:
@@ -464,24 +543,37 @@ def run_config_command(argv):
         print("Choose one service configuration action at a time.", file=sys.stderr)
         return 2
     flag, action = selected[0]
-    try:
-        index = argv.index(flag)
-        provider = argv[index + 1]
-    except IndexError:
-        print(f"{flag} requires a service id.", file=sys.stderr)
-        return 2
+    value = None
+    if action != "windows-custom-theme":
+        try:
+            index = argv.index(flag)
+            value = argv[index + 1]
+        except IndexError:
+            argument = "a mode" if action in {"tray-hover-percentage-mode", "windows-theme"} else "a service id"
+            print(f"{flag} requires {argument}.", file=sys.stderr)
+            return 2
     try:
         if action == "enable":
-            configure_service(provider, enabled=True)
+            configure_service(value, enabled=True)
         elif action == "disable":
-            configure_service(provider, enabled=False)
+            configure_service(value, enabled=False)
         elif action == "clear-key":
-            configure_service(provider, clear_key=True)
+            configure_service(value, clear_key=True)
+        elif action == "tray-hover-percentage-mode":
+            configure_tray_hover_percentage_mode(value)
+        elif action == "windows-theme":
+            configure_windows_theme(value)
+        elif action == "windows-custom-theme":
+            try:
+                palette = json.loads(sys.stdin.read())
+            except ValueError as err:
+                raise ValueError("The custom theme is not valid JSON.") from err
+            configure_windows_custom_theme(palette)
         else:
             key = sys.stdin.read().strip()
             if not key:
                 raise ValueError("No API key was provided.")
-            configure_service(provider, api_key=key)
+            configure_service(value, api_key=key)
     except (OSError, ValueError) as err:
         print(str(err), file=sys.stderr)
         return 2

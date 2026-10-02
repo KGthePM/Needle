@@ -23,6 +23,11 @@ SPEC = importlib.util.spec_from_file_location("needle", ROOT / "fetcher" / "need
 needle = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(needle)
 
+THEME_PALETTE = {
+    role: "#123456"
+    for role in needle.WINDOWS_THEME_COLOR_ROLES
+}
+
 
 def jwt(claims):
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
@@ -329,9 +334,334 @@ class ProviderTests(unittest.TestCase):
             contents = path.read_text(encoding="utf-8")
         self.assertEqual(contents, "{broken")
 
+    def test_configure_tray_hover_percentage_mode_preserves_other_settings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.json"
+            path.write_text(
+                json.dumps({"codex": {"enabled": True}, "windows": {"other": "kept"}}),
+                encoding="utf-8",
+            )
+            with mock.patch.object(needle, "CONFIG_PATH", path):
+                needle.configure_tray_hover_percentage_mode("both")
+            config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(config["codex"]["enabled"])
+        self.assertEqual(config["windows"]["other"], "kept")
+        self.assertEqual(config["windows"]["tray_hover_percentage_mode"], "both")
+
+    def test_configure_tray_hover_percentage_mode_rejects_unknown_mode(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.json"
+            path.write_text(json.dumps({"windows": {"other": "kept"}}), encoding="utf-8")
+            with mock.patch.object(needle, "CONFIG_PATH", path):
+                with self.assertRaisesRegex(ValueError, "Unknown tray hover percentage mode"):
+                    needle.configure_tray_hover_percentage_mode("tightest")
+            config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(config, {"windows": {"other": "kept"}})
+
+    def test_tray_hover_percentage_mode_command_updates_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.json"
+            with mock.patch.object(needle, "CONFIG_PATH", path):
+                result = needle.run_config_command(
+                    ["--set-tray-hover-percentage-mode", "hourly"]
+                )
+            config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(result, 0)
+        self.assertEqual(config["windows"]["tray_hover_percentage_mode"], "hourly")
+
+    def test_configure_windows_theme_preserves_other_settings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.json"
+            path.write_text(
+                json.dumps({"codex": {"enabled": True}, "windows": {"other": "kept"}}),
+                encoding="utf-8",
+            )
+            with mock.patch.object(needle, "CONFIG_PATH", path):
+                needle.configure_windows_theme("night")
+            config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(config["codex"]["enabled"])
+        self.assertEqual(config["windows"]["other"], "kept")
+        self.assertEqual(config["windows"]["theme"], "night")
+
+    def test_configure_windows_theme_rejects_unknown_mode(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.json"
+            path.write_text(json.dumps({"windows": {"other": "kept"}}), encoding="utf-8")
+            with mock.patch.object(needle, "CONFIG_PATH", path):
+                with self.assertRaisesRegex(ValueError, "Unknown Windows theme"):
+                    needle.configure_windows_theme("sepia")
+            config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(config, {"windows": {"other": "kept"}})
+
+    def test_configure_windows_custom_theme_saves_complete_palette(self):
+        palette = {**THEME_PALETTE, "accent": "#ABCDEF"}
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.json"
+            path.write_text(json.dumps({"windows": {"other": "kept"}}), encoding="utf-8")
+            with mock.patch.object(needle, "CONFIG_PATH", path):
+                needle.configure_windows_custom_theme(palette)
+            config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(config["windows"]["other"], "kept")
+        self.assertEqual(config["windows"]["theme"], "custom")
+        self.assertEqual(config["windows"]["custom_theme"]["accent"], "#abcdef")
+        self.assertEqual(set(config["windows"]["custom_theme"]), needle.WINDOWS_THEME_COLOR_ROLES)
+
+    def test_configure_windows_custom_theme_rejects_partial_or_invalid_palette(self):
+        invalid_palettes = [
+            {key: value for key, value in THEME_PALETTE.items() if key != "accent"},
+            {**THEME_PALETTE, "accent": "blue"},
+            {**THEME_PALETTE, "extra": "#123456"},
+        ]
+        for palette in invalid_palettes:
+            with self.subTest(palette=palette), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "config.json"
+                original = {"windows": {"other": "kept"}}
+                path.write_text(json.dumps(original), encoding="utf-8")
+                with mock.patch.object(needle, "CONFIG_PATH", path):
+                    with self.assertRaises(ValueError):
+                        needle.configure_windows_custom_theme(palette)
+                self.assertEqual(json.loads(path.read_text(encoding="utf-8")), original)
+
+    def test_windows_theme_commands_update_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.json"
+            with mock.patch.object(needle, "CONFIG_PATH", path):
+                self.assertEqual(needle.run_config_command(["--set-windows-theme", "dark"]), 0)
+                with mock.patch("sys.stdin", io.StringIO(json.dumps(THEME_PALETTE))):
+                    self.assertEqual(needle.run_config_command(["--set-windows-custom-theme"]), 0)
+            config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(config["windows"]["theme"], "custom")
+        self.assertEqual(config["windows"]["custom_theme"], {
+            role: "#123456" for role in sorted(needle.WINDOWS_THEME_COLOR_ROLES)
+        })
+
 
 @unittest.skipUnless(os.name == "nt" and WINDOWS_POWERSHELLS, "PowerShell tray smoke test requires Windows")
 class WindowsTrayTests(unittest.TestCase):
+    def test_deferred_render_does_not_dispose_active_combobox(self):
+        script = r'''
+Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.Windows.Forms
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $env:NEEDLE_TRAY_SCRIPT,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -gt 0) { throw $errors[0] }
+$definition = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Request-FlyoutRender'
+}, $true)
+. ([scriptblock]::Create($definition.Extent.Text))
+
+$script:ModalDepth = 0
+$script:IsRendering = $false
+$script:RenderQueued = $false
+$script:RenderPending = $false
+$script:RenderCount = 0
+$script:EventActive = $false
+$script:DisposedDuringEvent = $false
+$script:TimedOut = $false
+$script:Flyout = [Windows.Forms.Form]::new()
+$script:Flyout.ShowInTaskbar = $false
+$script:Flyout.Opacity = 0
+$script:Combo = [Windows.Forms.ComboBox]::new()
+[void]$script:Combo.Items.Add('System')
+[void]$script:Combo.Items.Add('Dark')
+$script:Flyout.Controls.Add($script:Combo)
+
+function Render-Flyout {
+    if ($script:EventActive) { $script:DisposedDuringEvent = $true }
+    $script:RenderCount++
+    $script:Combo.Dispose()
+    $script:Flyout.Close()
+}
+
+$script:Combo.Add_SelectedIndexChanged({
+    $script:EventActive = $true
+    Request-FlyoutRender
+    if ($script:Combo.IsDisposed) { $script:DisposedDuringEvent = $true }
+    $script:EventActive = $false
+})
+$script:Flyout.Add_Shown({ $script:Combo.SelectedIndex = 1 })
+$timeout = [Windows.Forms.Timer]::new()
+$timeout.Interval = 3000
+$timeout.Add_Tick({
+    $script:TimedOut = $true
+    $script:Flyout.Close()
+})
+$timeout.Start()
+[Windows.Forms.Application]::Run($script:Flyout)
+$timeout.Stop()
+$timeout.Dispose()
+$script:Flyout.Dispose()
+$script:RenderCount
+$script:DisposedDuringEvent
+$script:TimedOut
+'''
+        env = {**os.environ, "NEEDLE_TRAY_SCRIPT": str(ROOT / "windows" / "needle-tray.ps1")}
+        for executable in WINDOWS_POWERSHELLS:
+            with self.subTest(executable=executable):
+                result = subprocess.run(
+                    [executable, "-NoProfile", "-STA", "-Command", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    env=env,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip().splitlines(), ["1", "False", "False"])
+
+    def test_theme_mode_and_palette_resolution(self):
+        script = r'''
+Set-StrictMode -Version Latest
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $env:NEEDLE_TRAY_SCRIPT,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -gt 0) { throw $errors[0] }
+$names = @('Get-WindowsThemeMode', 'Get-ThemePalette', 'Test-CompleteThemePalette')
+$definitions = $ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in $names
+}, $true) | Sort-Object { $_.Extent.StartOffset }
+foreach ($definition in $definitions) {
+    . ([scriptblock]::Create($definition.Extent.Text))
+}
+Get-WindowsThemeMode ('{"windows":{"theme":"night"}}' | ConvertFrom-Json)
+Get-WindowsThemeMode ('{"windows":{"theme":"sepia"}}' | ConvertFrom-Json)
+(Get-ThemePalette 'light').background
+(Get-ThemePalette 'system' $null $false).background
+(Get-ThemePalette 'night').background
+$custom = Get-ThemePalette 'night'
+$custom.background = '#123456'
+(Get-ThemePalette 'custom' $custom).background
+Test-CompleteThemePalette $custom
+$custom.Remove('accent')
+(Get-ThemePalette 'custom' $custom).background
+Test-CompleteThemePalette $custom
+$empty = '{}' | ConvertFrom-Json
+(Get-ThemePalette 'custom' $empty).background
+Test-CompleteThemePalette $empty
+$partial = '{"background":"#123456"}' | ConvertFrom-Json
+(Get-ThemePalette 'custom' $partial).background
+Test-CompleteThemePalette $partial
+'''
+        expected = [
+            "night",
+            "system",
+            "#F7F8FA",
+            "#181B20",
+            "#060B14",
+            "#123456",
+            "True",
+            "#181B20",
+            "False",
+            "#181B20",
+            "False",
+            "#181B20",
+            "False",
+        ]
+        env = {**os.environ, "NEEDLE_TRAY_SCRIPT": str(ROOT / "windows" / "needle-tray.ps1")}
+        for executable in WINDOWS_POWERSHELLS:
+            with self.subTest(executable=executable):
+                result = subprocess.run(
+                    [executable, "-NoProfile", "-Command", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=env,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip().splitlines(), expected)
+
+    def test_summary_formats_each_hover_mode(self):
+        script = r'''
+$tokens = $null
+$errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $env:NEEDLE_TRAY_SCRIPT,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -gt 0) { throw $errors[0] }
+$names = @(
+    'Get-Value',
+    'Get-WindowLeft',
+    'Get-TrayHoverPercentageMode',
+    'Get-Summary',
+    'Get-EnabledServiceIds',
+    'Test-ProviderConnected'
+)
+$definitions = $ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in $names
+}, $true) | Sort-Object { $_.Extent.StartOffset }
+foreach ($definition in $definitions) {
+    . ([scriptblock]::Create($definition.Extent.Text))
+}
+$script:Services = @(
+    [pscustomobject]@{ Id = 'claude' }
+    [pscustomobject]@{ Id = 'codex' }
+    [pscustomobject]@{ Id = 'zai' }
+    [pscustomobject]@{ Id = 'openrouter' }
+)
+$script:TestConfig = $null
+function Get-Config { return $script:TestConfig }
+$data = '{"providers":[{"id":"codex","name":"ChatGPT / Codex","connected":true,"windows":[{"label":"5-hour","used":26},{"label":"Weekly","used":38}]}]}' | ConvertFrom-Json
+foreach ($mode in @('hourly', 'weekly', 'both')) {
+    $script:TestConfig = [pscustomobject]@{
+        codex = [pscustomobject]@{ enabled = $true }
+        windows = [pscustomobject]@{ tray_hover_percentage_mode = $mode }
+    }
+    Get-Summary $data
+}
+$script:TestConfig = [pscustomobject]@{ codex = [pscustomobject]@{ enabled = $true } }
+Get-Summary $data
+$hourlyOnly = '{"providers":[{"id":"codex","name":"ChatGPT / Codex","connected":true,"windows":[{"label":"5-hour","used":26}]}]}' | ConvertFrom-Json
+Get-Summary $hourlyOnly
+$script:TestConfig = [pscustomobject]@{
+    claude = [pscustomobject]@{ enabled = $true }
+    codex = [pscustomobject]@{ enabled = $true }
+    zai = [pscustomobject]@{ enabled = $true }
+    openrouter = [pscustomobject]@{ enabled = $true }
+    windows = [pscustomobject]@{ tray_hover_percentage_mode = 'both' }
+}
+$longData = '{"providers":[{"id":"claude","name":"Claude","connected":true,"windows":[{"label":"5-hour","used":0},{"label":"Weekly","used":0}]},{"id":"codex","name":"ChatGPT / Codex","connected":true,"windows":[{"label":"5-hour","used":0},{"label":"Weekly","used":0}]},{"id":"zai","name":"z.ai","connected":true,"windows":[{"label":"5-hour","used":0},{"label":"Weekly","used":0}]},{"id":"openrouter","name":"OpenRouter","connected":true,"balance":{"remaining":100000}}]}' | ConvertFrom-Json
+Get-Summary $longData
+'''
+        expected = [
+            "Needle | G 74%",
+            "Needle | G 62%",
+            "Needle | G 74%/H 62%/W",
+            "Needle | G 62%",
+            "Needle | G n/a",
+            "Needle | C 100%/H 100%/W G 100%/H 100%/W Z 100%/H 100%/W ...",
+        ]
+        env = {**os.environ, "NEEDLE_TRAY_SCRIPT": str(ROOT / "windows" / "needle-tray.ps1")}
+        for executable in WINDOWS_POWERSHELLS:
+            with self.subTest(executable=executable):
+                result = subprocess.run(
+                    [executable, "-NoProfile", "-Command", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=env,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip().splitlines(), expected)
+
     def test_once_mode_runs_shared_fetcher(self):
         with tempfile.TemporaryDirectory() as temp:
             temp = Path(temp)

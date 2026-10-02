@@ -20,5 +20,94 @@
     "type": "switch",
     "default": true,
     "description": "Show what's left (off shows what's used)"
+  },
+  "theme-head": { "type": "header", "description": "Theme" },
+  "theme-mode": {
+    "type": "combobox",
+    "default": "system",
+    "options": {
+      "Light": "light",
+      "System": "system",
+      "Dark": "dark",
+      "Night": "night",
+      "Custom": "custom"
+    },
+    "description": "Popup theme"
+  },
+  "palette-head": { "type": "header", "description": "Custom palette" },
+  "theme-background": {
+    "type": "colorchooser",
+    "default": "#10141d",
+    "description": "Background"
+  },
+  "theme-surface": {
+    "type": "colorchooser",
+    "default": "#1a202c",
+    "description": "Surface"
+  },
+  "theme-text": {
+    "type": "colorchooser",
+    "default": "#f2f4f8",
+    "description": "Text"
+  },
+  "theme-muted": {
+    "type": "colorchooser",
+    "default": "#9aa6b8",
+    "description": "Muted text"
+  },
+  "theme-border": {
+    "type": "colorchooser",
+    "default": "#354052",
+    "description": "Borders"
+  },
+  "theme-accent": {
+    "type": "colorchooser",
+    "default": "#6ea8fe",
+    "description": "Accent"
+  },
+  "theme-hover": {
+    "type": "colorchooser",
+    "default": "#293244",
+    "description": "Hover"
+  },
+  "theme-track": {
+    "type": "colorchooser",
+    "default": "#3a4558",
+    "description": "Gauge track"
+  },
+  "theme-success": {
+    "type": "colorchooser",
+    "default": "#34c58a",
+    "description": "Success"
+  },
+  "theme-warning": {
+    "type": "colorchooser",
+    "default": "#e9a93a",
+    "description": "Warning"
+  },
+  "theme-critical": {
+    "type": "colorchooser",
+    "default": "#f06b72",
+    "description": "Critical"
+  },
+  "theme-claude": {
+    "type": "colorchooser",
+    "default": "#d97757",
+    "description": "Claude"
+  },
+  "theme-codex": {
+    "type": "colorchooser",
+    "default": "#10a37f",
+    "description": "ChatGPT / Codex"
+  },
+  "theme-zai": {
+    "type": "colorchooser",
+    "default": "#5b83ff",
+    "description": "z.ai"
+  },
+  "theme-openrouter": {
+    "type": "colorchooser",
+    "default": "#9b8cff",
+    "description": "OpenRouter"
   }
 }

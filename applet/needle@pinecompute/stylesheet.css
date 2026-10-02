@@ -76,3 +76,64 @@
 .aiu-btn:focus  { background-color: rgba(128, 128, 128, 0.28); }
 .aiu-btn:active { background-color: rgba(128, 128, 128, 0.38); }
 .aiu-btn:insensitive { color: rgba(128, 128, 128, 0.8); }
+
+/* Explicit themes are scoped to the applet popup. System intentionally keeps
+   Cinnamon's inherited popup colors and the neutral defaults above. */
+.aiu-theme-light, .aiu-theme-dark, .aiu-theme-night, .aiu-theme-custom {
+  border: 1px solid;
+  border-radius: 8px;
+}
+.aiu-theme-light { background-color: #f4f6f8; color: #20242b; border-color: #cdd3dc; }
+.aiu-theme-dark { background-color: #171a20; color: #f1f3f6; border-color: #3b414c; }
+.aiu-theme-night { background-color: #060a12; color: #e8f0ff; border-color: #24324a; }
+
+.aiu-theme-light .aiu-card { background-color: #ffffff; border-color: #cdd3dc; }
+.aiu-theme-dark .aiu-card { background-color: #22262e; border-color: #3b414c; }
+.aiu-theme-night .aiu-card { background-color: #0c1422; border-color: #24324a; }
+
+.aiu-theme-light .aiu-small, .aiu-theme-light .aiu-section-label, .aiu-theme-light .aiu-note { color: #667085; }
+.aiu-theme-dark .aiu-small, .aiu-theme-dark .aiu-section-label, .aiu-theme-dark .aiu-note { color: #a5adba; }
+.aiu-theme-night .aiu-small, .aiu-theme-night .aiu-section-label, .aiu-theme-night .aiu-note { color: #8fa2bf; }
+
+.aiu-theme-light .aiu-nav-btn, .aiu-theme-light .aiu-service-btn, .aiu-theme-light .aiu-setting-row, .aiu-theme-light .aiu-icon-btn { color: #20242b; border-color: #cdd3dc; }
+.aiu-theme-dark .aiu-nav-btn, .aiu-theme-dark .aiu-service-btn, .aiu-theme-dark .aiu-setting-row, .aiu-theme-dark .aiu-icon-btn { color: #f1f3f6; border-color: #3b414c; }
+.aiu-theme-night .aiu-nav-btn, .aiu-theme-night .aiu-service-btn, .aiu-theme-night .aiu-setting-row, .aiu-theme-night .aiu-icon-btn { color: #e8f0ff; border-color: #24324a; }
+.aiu-theme-light .aiu-nav-btn:hover, .aiu-theme-light .aiu-nav-btn:focus, .aiu-theme-light .aiu-service-btn:hover, .aiu-theme-light .aiu-service-btn:focus, .aiu-theme-light .aiu-setting-row:hover, .aiu-theme-light .aiu-setting-row:focus, .aiu-theme-light .aiu-icon-btn:hover, .aiu-theme-light .aiu-icon-btn:focus { background-color: #e5eaf1; }
+.aiu-theme-dark .aiu-nav-btn:hover, .aiu-theme-dark .aiu-nav-btn:focus, .aiu-theme-dark .aiu-service-btn:hover, .aiu-theme-dark .aiu-service-btn:focus, .aiu-theme-dark .aiu-setting-row:hover, .aiu-theme-dark .aiu-setting-row:focus, .aiu-theme-dark .aiu-icon-btn:hover, .aiu-theme-dark .aiu-icon-btn:focus { background-color: #303641; }
+.aiu-theme-night .aiu-nav-btn:hover, .aiu-theme-night .aiu-nav-btn:focus, .aiu-theme-night .aiu-service-btn:hover, .aiu-theme-night .aiu-service-btn:focus, .aiu-theme-night .aiu-setting-row:hover, .aiu-theme-night .aiu-setting-row:focus, .aiu-theme-night .aiu-icon-btn:hover, .aiu-theme-night .aiu-icon-btn:focus { background-color: #14223a; }
+
+.aiu-theme-light .aiu-track { background-color: #d8dde5; }
+.aiu-theme-dark .aiu-track { background-color: #454c58; }
+.aiu-theme-night .aiu-track { background-color: #263650; }
+.aiu-theme-light .aiu-tick { background-color: #667085; }
+.aiu-theme-dark .aiu-tick { background-color: #a5adba; }
+.aiu-theme-night .aiu-tick { background-color: #8fa2bf; }
+.aiu-theme-light .aiu-fill-ok, .aiu-theme-dark .aiu-fill-ok, .aiu-theme-night .aiu-fill-ok { background-color: #34c58a; }
+.aiu-theme-light .aiu-fill-warn { background-color: #a15c00; }
+.aiu-theme-dark .aiu-fill-warn { background-color: #e9a93a; }
+.aiu-theme-night .aiu-fill-warn { background-color: #f0b44d; }
+.aiu-theme-light .aiu-fill-crit { background-color: #c9364b; }
+.aiu-theme-dark .aiu-fill-crit { background-color: #f06b72; }
+.aiu-theme-night .aiu-fill-crit { background-color: #ff667a; }
+
+.aiu-theme-light .aiu-note-error, .aiu-theme-light .aiu-danger { color: #c9364b; }
+.aiu-theme-dark .aiu-note-error, .aiu-theme-dark .aiu-danger { color: #f06b72; }
+.aiu-theme-night .aiu-note-error, .aiu-theme-night .aiu-danger { color: #ff667a; }
+.aiu-theme-light .aiu-theme-choice-selected, .aiu-theme-light .aiu-add-large { color: #2563b9; }
+.aiu-theme-dark .aiu-theme-choice-selected, .aiu-theme-dark .aiu-add-large { color: #6ea8fe; }
+.aiu-theme-night .aiu-theme-choice-selected, .aiu-theme-night .aiu-add-large { color: #78a9ff; }
+.aiu-theme-light .aiu-add-large { background-color: #ffffff; }
+.aiu-theme-dark .aiu-add-large { background-color: #22262e; }
+.aiu-theme-night .aiu-add-large { background-color: #0c1422; }
+.aiu-theme-light .aiu-add-large:hover, .aiu-theme-light .aiu-add-large:focus { background-color: #e5eaf1; }
+.aiu-theme-dark .aiu-add-large:hover, .aiu-theme-dark .aiu-add-large:focus { background-color: #303641; }
+.aiu-theme-night .aiu-add-large:hover, .aiu-theme-night .aiu-add-large:focus { background-color: #14223a; }
+
+.aiu-theme-light .aiu-dot-claude, .aiu-theme-dark .aiu-dot-claude, .aiu-theme-night .aiu-dot-claude { background-color: #d97757; }
+.aiu-theme-light .aiu-dot-codex, .aiu-theme-dark .aiu-dot-codex, .aiu-theme-night .aiu-dot-codex { background-color: #10a37f; }
+.aiu-theme-light .aiu-dot-zai { background-color: #4169d8; }
+.aiu-theme-dark .aiu-dot-zai { background-color: #5b83ff; }
+.aiu-theme-night .aiu-dot-zai { background-color: #6b91ff; }
+.aiu-theme-light .aiu-dot-openrouter { background-color: #725fc7; }
+.aiu-theme-dark .aiu-dot-openrouter { background-color: #9b8cff; }
+.aiu-theme-night .aiu-dot-openrouter { background-color: #aa9cff; }

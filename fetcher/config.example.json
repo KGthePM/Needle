@@ -19,5 +19,9 @@
     "enabled": false,
     "_note": "A management key shows your account balance. A regular key shows that key's own limit.",
     "api_key": ""
+  },
+  "windows": {
+    "tray_hover_percentage_mode": "weekly",
+    "theme": "system"
   }
 }

@@ -94,6 +94,168 @@ function Get-Value {
     return $property.Value
 }
 
+function Get-WindowsThemeMode {
+    param($Config)
+    $windows = $null
+    if ($null -ne $Config) {
+        if ($Config -is [Collections.IDictionary]) { $windows = $Config['windows'] }
+        else {
+            $property = $Config.PSObject.Properties['windows']
+            if ($null -ne $property) { $windows = $property.Value }
+        }
+    }
+    $mode = $null
+    if ($null -ne $windows) {
+        if ($windows -is [Collections.IDictionary]) { $mode = $windows['theme'] }
+        else {
+            $property = $windows.PSObject.Properties['theme']
+            if ($null -ne $property) { $mode = $property.Value }
+        }
+    }
+    $mode = ([string]$mode).ToLowerInvariant()
+    if ($mode -notin @('light', 'system', 'dark', 'night', 'custom')) { return 'system' }
+    return $mode
+}
+
+function Get-ThemePalette {
+    param(
+        [string]$Mode = 'system',
+        $CustomTheme = $null,
+        [bool]$SystemUsesLight = $true
+    )
+    $palettes = @{
+        light = [ordered]@{
+            background = '#F7F8FA'; surface = '#FFFFFF'; text = '#23272F'; muted = '#626974'; border = '#D2D6DC'
+            accent = '#2563EB'; hover = '#EEF2F7'; track = '#DDE2E8'; success = '#237A3B'; warning = '#A65D00'
+            critical = '#B22222'; claude = '#C15F3C'; codex = '#17845B'; zai = '#4169E1'; openrouter = '#8F52B8'
+        }
+        dark = [ordered]@{
+            background = '#181B20'; surface = '#22262D'; text = '#F2F4F7'; muted = '#AAB1BC'; border = '#3B424D'
+            accent = '#2563EB'; hover = '#2B3038'; track = '#343B45'; success = '#55B879'; warning = '#E4A343'
+            critical = '#F06A6A'; claude = '#E07A52'; codex = '#4DB889'; zai = '#7192F3'; openrouter = '#BC7BDA'
+        }
+        night = [ordered]@{
+            background = '#060B14'; surface = '#0B1320'; text = '#E6EDF7'; muted = '#8A9AB0'; border = '#22324A'
+            accent = '#2563EB'; hover = '#111E30'; track = '#1A2A40'; success = '#45C486'; warning = '#F0B95A'
+            critical = '#FF6B78'; claude = '#E88561'; codex = '#49C694'; zai = '#75A7FF'; openrouter = '#C58AF0'
+        }
+        custom = [ordered]@{
+            background = '#181B20'; surface = '#22262D'; text = '#F2F4F7'; muted = '#AAB1BC'; border = '#3B424D'
+            accent = '#2563EB'; hover = '#2B3038'; track = '#343B45'; success = '#55B879'; warning = '#E4A343'
+            critical = '#F06A6A'; claude = '#E07A52'; codex = '#4DB889'; zai = '#7192F3'; openrouter = '#BC7BDA'
+        }
+    }
+    $roles = @('background', 'surface', 'text', 'muted', 'border', 'accent', 'hover', 'track', 'success', 'warning', 'critical', 'claude', 'codex', 'zai', 'openrouter')
+    $mode = $Mode.ToLowerInvariant()
+    if ($mode -notin @('light', 'system', 'dark', 'night', 'custom')) { $mode = 'system' }
+    if ($mode -eq 'system') { $mode = if ($SystemUsesLight) { 'light' } else { 'dark' } }
+    if ($mode -eq 'custom' -and $null -ne $CustomTheme) {
+        $names = @(
+            if ($CustomTheme -is [Collections.IDictionary]) { $CustomTheme.Keys }
+            else { $CustomTheme.PSObject.Properties | ForEach-Object { $_.Name } }
+        )
+        $complete = $names.Count -eq $roles.Count
+        foreach ($role in $roles) {
+            $value = if ($CustomTheme -is [Collections.IDictionary]) { $CustomTheme[$role] } else {
+                $property = $CustomTheme.PSObject.Properties[$role]
+                if ($null -ne $property) { $property.Value } else { $null }
+            }
+            if ($role -notin $names -or [string]$value -notmatch '^#[0-9a-fA-F]{6}$') { $complete = $false; break }
+        }
+        if ($complete) {
+            $palette = [ordered]@{}
+            foreach ($role in $roles) {
+                $palette[$role] = if ($CustomTheme -is [Collections.IDictionary]) { [string]$CustomTheme[$role] } else { [string]$CustomTheme.PSObject.Properties[$role].Value }
+            }
+            return $palette
+        }
+    }
+    return $palettes[$mode]
+}
+
+function Test-CompleteThemePalette {
+    param($Palette)
+    if ($null -eq $Palette) { return $false }
+    $roles = @('background', 'surface', 'text', 'muted', 'border', 'accent', 'hover', 'track', 'success', 'warning', 'critical', 'claude', 'codex', 'zai', 'openrouter')
+    $names = @(
+        if ($Palette -is [Collections.IDictionary]) { $Palette.Keys }
+        else { $Palette.PSObject.Properties | ForEach-Object { $_.Name } }
+    )
+    if ($names.Count -ne $roles.Count) { return $false }
+    foreach ($role in $roles) {
+        if ($role -notin $names) { return $false }
+        $value = if ($Palette -is [Collections.IDictionary]) { $Palette[$role] } else { $Palette.PSObject.Properties[$role].Value }
+        if ([string]$value -notmatch '^#[0-9a-fA-F]{6}$') { return $false }
+    }
+    return $true
+}
+
+function ConvertTo-ThemeHex {
+    param([Drawing.Color]$Color)
+    return '#{0:X2}{1:X2}{2:X2}' -f $Color.R, $Color.G, $Color.B
+}
+
+function Get-SystemUsesLightTheme {
+    try {
+        $value = Get-ItemPropertyValue -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name AppsUseLightTheme -ErrorAction Stop
+        return [int]$value -ne 0
+    }
+    catch { return $true }
+}
+
+function Get-HighContrastThemePalette {
+    return [ordered]@{
+        background = ConvertTo-ThemeHex ([Drawing.SystemColors]::Window)
+        surface = ConvertTo-ThemeHex ([Drawing.SystemColors]::Control)
+        text = ConvertTo-ThemeHex ([Drawing.SystemColors]::WindowText)
+        muted = ConvertTo-ThemeHex ([Drawing.SystemColors]::GrayText)
+        border = ConvertTo-ThemeHex ([Drawing.SystemColors]::ActiveBorder)
+        accent = ConvertTo-ThemeHex ([Drawing.SystemColors]::Highlight)
+        hover = ConvertTo-ThemeHex ([Drawing.SystemColors]::ControlLight)
+        track = ConvertTo-ThemeHex ([Drawing.SystemColors]::ScrollBar)
+        success = ConvertTo-ThemeHex ([Drawing.SystemColors]::WindowText)
+        warning = ConvertTo-ThemeHex ([Drawing.SystemColors]::WindowText)
+        critical = ConvertTo-ThemeHex ([Drawing.SystemColors]::WindowText)
+        claude = ConvertTo-ThemeHex ([Drawing.SystemColors]::Highlight)
+        codex = ConvertTo-ThemeHex ([Drawing.SystemColors]::Highlight)
+        zai = ConvertTo-ThemeHex ([Drawing.SystemColors]::Highlight)
+        openrouter = ConvertTo-ThemeHex ([Drawing.SystemColors]::Highlight)
+    }
+}
+
+function Get-ThemeColor {
+    param([string]$Role)
+    return [Drawing.ColorTranslator]::FromHtml([string]$script:ThemePalette[$Role])
+}
+
+function Get-ThemeContrastColor {
+    param([string]$Role)
+    $base = Get-ThemeColor $Role
+    $brightness = 299 * $base.R + 587 * $base.G + 114 * $base.B
+    if ($brightness -gt 127500) { return [Drawing.Color]::Black }
+    return [Drawing.Color]::White
+}
+
+function Set-ActiveTheme {
+    param($Config)
+    $mode = Get-WindowsThemeMode $Config
+    $windows = Get-Value $Config 'windows'
+    $customTheme = Get-Value $windows 'custom_theme'
+    if ([Windows.Forms.SystemInformation]::HighContrast) {
+        $script:ThemePalette = Get-HighContrastThemePalette
+    }
+    else {
+        $systemUsesLight = if ($mode -eq 'system') { Get-SystemUsesLightTheme } else { $true }
+        $script:ThemePalette = Get-ThemePalette $mode $customTheme $systemUsesLight
+    }
+    $script:Flyout.BackColor = Get-ThemeColor 'background'
+    $script:Flyout.ForeColor = Get-ThemeColor 'text'
+    $script:Header.BackColor = Get-ThemeColor 'surface'
+    $script:Header.ForeColor = Get-ThemeColor 'text'
+    $script:Content.BackColor = Get-ThemeColor 'background'
+    $script:Content.ForeColor = Get-ThemeColor 'text'
+}
+
 function Get-BindingLeft {
     param($Provider)
     $left = @(
@@ -108,11 +270,37 @@ function Get-BindingLeft {
     return [double](($left | Measure-Object -Minimum).Minimum)
 }
 
+function Get-WindowLeft {
+    param($Provider, [string]$Label)
+    foreach ($window in @(Get-Value $Provider 'windows' @())) {
+        if ([string](Get-Value $window 'label' '') -eq $Label) {
+            return 100.0 - [double](Get-Value $window 'used' 100)
+        }
+    }
+    return $null
+}
+
+function Get-TrayHoverPercentageMode {
+    param($Config = $null)
+    if ($null -eq $Config) { $Config = Get-Config }
+    $windows = Get-Value $Config 'windows'
+    $mode = [string](Get-Value $windows 'tray_hover_percentage_mode' 'weekly')
+    if ($mode -notin @('hourly', 'weekly', 'both')) { return 'weekly' }
+    return $mode
+}
+
 function Get-LevelColor {
     param([double]$Left)
     if ($Left -le 10) { return [Drawing.Color]::Firebrick }
     if ($Left -le 30) { return [Drawing.Color]::DarkOrange }
     return [Drawing.Color]::ForestGreen
+}
+
+function Get-LevelThemeColor {
+    param([double]$Left)
+    if ($Left -le 10) { return Get-ThemeColor 'critical' }
+    if ($Left -le 30) { return Get-ThemeColor 'warning' }
+    return Get-ThemeColor 'success'
 }
 
 function Format-Duration {
@@ -179,14 +367,35 @@ function Get-Summary {
     param($Data)
     $tags = @{ claude = 'C'; codex = 'G'; zai = 'Z' }
     $parts = @()
-    $enabledIds = @(Get-EnabledServiceIds (Get-Config))
+    $config = Get-Config
+    $enabledIds = @(Get-EnabledServiceIds $config)
+    $mode = Get-TrayHoverPercentageMode $config
     foreach ($provider in @(Get-Value $Data 'providers' @())) {
         $providerId = [string](Get-Value $provider 'id' '')
         if ($providerId -notin $enabledIds -or -not (Test-ProviderConnected $provider)) { continue }
-        $left = Get-BindingLeft $provider
-        if ($null -ne $left) {
-            $tag = if ($tags.ContainsKey($providerId)) { $tags[$providerId] } else { ([string](Get-Value $provider 'name' '?')).Substring(0, 1) }
-            $parts += '{0} {1}%' -f $tag, [Math]::Round($left)
+        $tag = if ($tags.ContainsKey($providerId)) { $tags[$providerId] } else { ([string](Get-Value $provider 'name' '?')).Substring(0, 1) }
+        $windowLabels = switch ($mode) {
+            'hourly' { @('5-hour') }
+            'weekly' { @('Weekly') }
+            default { @('5-hour', 'Weekly') }
+        }
+        $usageParts = @(
+            foreach ($label in $windowLabels) {
+                $left = Get-WindowLeft $provider $label
+                if ($null -eq $left) { continue }
+                $suffix = if ($mode -eq 'both') {
+                    if ($label -eq '5-hour') { '/H' } else { '/W' }
+                }
+                else { '' }
+                '{0}%{1}' -f [Math]::Round($left), $suffix
+            }
+        )
+        if ($usageParts.Count -gt 0) {
+            $parts += $tag + ' ' + ($usageParts -join ' ')
+            continue
+        }
+        if (@(Get-Value $provider 'windows' @()).Count -gt 0) {
+            $parts += $tag + ' n/a'
             continue
         }
         $balance = Get-Value $provider 'balance'
@@ -194,7 +403,19 @@ function Get-Summary {
         if ($null -ne $remaining) { $parts += ('$' + [Math]::Round([double]$remaining)) }
     }
     if ($parts.Count -eq 0) { return 'Needle - no usage data yet' }
-    return 'Needle | ' + ($parts -join '  ')
+    $separator = if ($mode -eq 'both') { ' ' } else { '  ' }
+    $summary = 'Needle | '
+    foreach ($part in $parts) {
+        $joiner = if ($summary -eq 'Needle | ') { '' } else { $separator }
+        $candidate = $summary + $joiner + $part
+        if ($candidate.Length -gt 63) {
+            $ellipsis = if ($summary.EndsWith(' ')) { '...' } else { ' ...' }
+            if (($summary.Length + $ellipsis.Length) -le 63) { return $summary + $ellipsis }
+            return $summary.TrimEnd()
+        }
+        $summary = $candidate
+    }
+    return $summary
 }
 
 function Get-LowestLeft {
@@ -243,6 +464,10 @@ $script:CurrentIcon = $null
 $script:CurrentView = 'Usage'
 $script:ConfigError = $null
 $script:AllowDeactivate = $false
+$script:ModalDepth = 0
+$script:IsRendering = $false
+$script:RenderQueued = $false
+$script:RenderPending = $false
 $script:LastFlyoutClose = 0
 $script:FlyoutAnchor = $null
 $script:FlyoutOpensUp = $true
@@ -252,6 +477,7 @@ $script:Services = @(
     [pscustomobject]@{ Id = 'zai'; Name = 'z.ai'; Description = 'Coding Plan usage from an API key.'; Keyed = $true; KeyUrl = 'https://z.ai/manage-apikey/apikey-list'; KeyHint = 'Paste your z.ai Coding Plan API key.' },
     [pscustomobject]@{ Id = 'openrouter'; Name = 'OpenRouter'; Description = 'Account balance or per-key spending limit.'; Keyed = $true; KeyUrl = 'https://openrouter.ai/settings/keys'; KeyHint = 'Paste an OpenRouter key. A management key shows your whole balance; a regular key shows that key''s own limit.' }
 )
+$script:ThemePalette = Get-ThemePalette 'system'
 
 if (Test-Path -LiteralPath $script:CachePath) {
     try { $script:Data = Get-Content -LiteralPath $script:CachePath -Raw | ConvertFrom-Json } catch {}
@@ -269,12 +495,14 @@ $script:Flyout.StartPosition = [Windows.Forms.FormStartPosition]::Manual
 $script:Flyout.ShowInTaskbar = $false
 $script:Flyout.TopMost = $true
 $script:Flyout.KeyPreview = $true
-$script:Flyout.BackColor = [Drawing.Color]::FromArgb(247, 248, 250)
+$script:Flyout.BackColor = Get-ThemeColor 'background'
+$script:Flyout.ForeColor = Get-ThemeColor 'text'
 $script:Flyout.ClientSize = [Drawing.Size]::new(420, 480)
 $script:Header = [Windows.Forms.Panel]::new()
 $script:Header.Dock = [Windows.Forms.DockStyle]::Top
 $script:Header.Height = 48
-$script:Header.BackColor = [Drawing.Color]::White
+$script:Header.BackColor = Get-ThemeColor 'surface'
+$script:Header.ForeColor = Get-ThemeColor 'text'
 $script:Content = [Windows.Forms.Panel]::new()
 $script:Content.Dock = [Windows.Forms.DockStyle]::Fill
 $script:Content.AutoScroll = $true
@@ -298,18 +526,20 @@ function New-FlyoutButton {
     $button.Location = [Drawing.Point]::new($X, $Y)
     $button.Size = [Drawing.Size]::new($Width, $Height)
     $button.FlatStyle = [Windows.Forms.FlatStyle]::Flat
-    $button.FlatAppearance.BorderColor = [Drawing.Color]::FromArgb(210, 214, 220)
+    $button.FlatAppearance.BorderColor = Get-ThemeColor 'border'
+    $button.FlatAppearance.MouseOverBackColor = Get-ThemeColor 'hover'
+    $button.FlatAppearance.MouseDownBackColor = Get-ThemeColor 'track'
     $button.Font = $script:UiFont
     $button.Cursor = [Windows.Forms.Cursors]::Hand
-    $button.BackColor = [Drawing.Color]::White
-    $button.ForeColor = [Drawing.Color]::FromArgb(35, 39, 47)
+    $button.BackColor = Get-ThemeColor 'surface'
+    $button.ForeColor = Get-ThemeColor 'text'
     if ($Primary) {
-        $button.BackColor = [Drawing.Color]::FromArgb(37, 99, 235)
-        $button.ForeColor = [Drawing.Color]::White
+        $button.BackColor = Get-ThemeColor 'accent'
+        $button.ForeColor = Get-ThemeContrastColor 'accent'
         $button.FlatAppearance.BorderColor = $button.BackColor
         $button.Font = $script:UiBoldFont
     }
-    if ($Danger) { $button.ForeColor = [Drawing.Color]::Firebrick }
+    if ($Danger) { $button.ForeColor = Get-ThemeColor 'critical' }
     if ($Action) { $button.Add_Click($Action) }
     return $button
 }
@@ -332,7 +562,8 @@ function Add-FlyoutText {
     $label.MaximumSize = [Drawing.Size]::new($Width, 0)
     $label.Font = $Font
     $label.TextAlign = if ($Align -eq [Windows.Forms.HorizontalAlignment]::Center) { [Drawing.ContentAlignment]::TopCenter } else { [Drawing.ContentAlignment]::TopLeft }
-    if ($Color -ne [Drawing.Color]::Empty) { $label.ForeColor = $Color }
+    $label.ForeColor = if ($Color -ne [Drawing.Color]::Empty) { $Color } else { Get-ThemeColor 'text' }
+    $label.BackColor = [Drawing.Color]::Transparent
     $script:Content.Controls.Add($label)
     $script:RenderY += $label.PreferredHeight + $After
     return $label
@@ -344,7 +575,7 @@ function Add-FlyoutDivider {
     $line = [Windows.Forms.Panel]::new()
     $line.Location = [Drawing.Point]::new(16, $script:RenderY)
     $line.Size = [Drawing.Size]::new(388, 1)
-    $line.BackColor = [Drawing.Color]::FromArgb(220, 223, 228)
+    $line.BackColor = Get-ThemeColor 'border'
     $script:Content.Controls.Add($line)
     $script:RenderY += 1 + $BottomMargin
 }
@@ -383,16 +614,26 @@ function Test-ProviderConnected {
 
 function Show-FlyoutMessage {
     param([string]$Text, [Windows.Forms.MessageBoxIcon]$Icon = [Windows.Forms.MessageBoxIcon]::Warning)
+    $previousAllowDeactivate = $script:AllowDeactivate
     $script:AllowDeactivate = $true
+    $script:ModalDepth++
     try {
         [void][Windows.Forms.MessageBox]::Show($script:Flyout, $Text, 'Needle', [Windows.Forms.MessageBoxButtons]::OK, $Icon)
     }
-    finally { $script:AllowDeactivate = $false }
+    finally {
+        $script:ModalDepth--
+        $script:AllowDeactivate = $previousAllowDeactivate
+        if ($script:ModalDepth -eq 0 -and $script:RenderPending) {
+            $script:RenderPending = $false
+            Request-FlyoutRender
+        }
+    }
 }
 
 function Invoke-ConfigCommand {
-    param([string]$Flag, [string]$ServiceId, [AllowNull()][string]$InputText = $null)
-    $arguments = @($script:Python.Prefix) + @($script:Fetcher, $Flag, $ServiceId)
+    param([string]$Flag, [AllowNull()][string]$Value = $null, [AllowNull()][string]$InputText = $null)
+    $arguments = @($script:Python.Prefix) + @($script:Fetcher, $Flag)
+    if ($null -ne $Value) { $arguments += $Value }
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $script:Python.File
     $info.Arguments = (($arguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join ' ')
@@ -423,6 +664,174 @@ function Invoke-ConfigCommand {
     catch {
         Show-FlyoutMessage ("Could not update settings: " + $_.Exception.Message)
         return $false
+    }
+}
+
+function Set-ThemedDialog {
+    param([Windows.Forms.Form]$Dialog)
+    $Dialog.BackColor = Get-ThemeColor 'background'
+    $Dialog.ForeColor = Get-ThemeColor 'text'
+    foreach ($control in @($Dialog.Controls)) {
+        $pending = [Collections.Queue]::new()
+        $pending.Enqueue($control)
+        while ($pending.Count -gt 0) {
+            $item = $pending.Dequeue()
+            if ($item -is [Windows.Forms.TextBox]) {
+                $item.BackColor = Get-ThemeColor 'surface'
+                $item.ForeColor = Get-ThemeColor 'text'
+            }
+            elseif ($item -is [Windows.Forms.ComboBox] -or $item -is [Windows.Forms.CheckBox]) {
+                $item.BackColor = Get-ThemeColor 'surface'
+                $item.ForeColor = Get-ThemeColor 'text'
+            }
+            elseif ($item -is [Windows.Forms.LinkLabel]) {
+                $item.BackColor = [Drawing.Color]::Transparent
+                $item.LinkColor = Get-ThemeColor 'accent'
+                $item.ActiveLinkColor = Get-ThemeColor 'critical'
+                $item.VisitedLinkColor = Get-ThemeColor 'muted'
+            }
+            elseif ($item -is [Windows.Forms.Label]) {
+                $item.BackColor = [Drawing.Color]::Transparent
+                $item.ForeColor = Get-ThemeColor 'text'
+            }
+            elseif ($item -is [Windows.Forms.Panel]) {
+                $item.BackColor = Get-ThemeColor 'background'
+                $item.ForeColor = Get-ThemeColor 'text'
+            }
+            foreach ($child in @($item.Controls)) { $pending.Enqueue($child) }
+        }
+    }
+}
+
+function Show-CustomThemeEditor {
+    param($InitialPalette)
+    $roleLabels = [ordered]@{
+        background = 'Background'
+        surface = 'Surface'
+        text = 'Text'
+        muted = 'Muted text'
+        border = 'Borders and dividers'
+        accent = 'Accent'
+        hover = 'Hover surface'
+        track = 'Progress track'
+        success = 'Success status'
+        warning = 'Warning status'
+        critical = 'Critical status'
+        claude = 'Claude'
+        codex = 'ChatGPT / Codex'
+        zai = 'z.ai'
+        openrouter = 'OpenRouter'
+    }
+    $initial = Get-ThemePalette 'custom' $InitialPalette
+    $colors = [ordered]@{}
+    foreach ($role in $roleLabels.Keys) {
+        $colors[$role] = [string]$initial[$role]
+    }
+
+    $dialog = [Windows.Forms.Form]::new()
+    $dialog.Text = 'Edit custom palette'
+    $dialog.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialog.StartPosition = [Windows.Forms.FormStartPosition]::CenterParent
+    $dialog.ClientSize = [Drawing.Size]::new(470, 550)
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.Font = $script:UiFont
+
+    $footer = [Windows.Forms.Panel]::new()
+    $footer.Dock = [Windows.Forms.DockStyle]::Bottom
+    $footer.Height = 58
+    $list = [Windows.Forms.Panel]::new()
+    $list.Dock = [Windows.Forms.DockStyle]::Fill
+    $list.AutoScroll = $true
+    $dialog.Controls.Add($list)
+    $dialog.Controls.Add($footer)
+
+    $swatches = @{}
+    $valueLabels = @{}
+    $y = 14
+    foreach ($role in $roleLabels.Keys) {
+        $name = [Windows.Forms.Label]::new()
+        $name.Text = $roleLabels[$role]
+        $name.Location = [Drawing.Point]::new(16, $y + 5)
+        $name.Size = [Drawing.Size]::new(185, 22)
+        $list.Controls.Add($name)
+
+        $value = [Windows.Forms.Label]::new()
+        $value.Text = $colors[$role].ToUpperInvariant()
+        $value.Location = [Drawing.Point]::new(205, $y + 5)
+        $value.Size = [Drawing.Size]::new(82, 22)
+        $value.Font = $script:UiMonoFont
+        $list.Controls.Add($value)
+        $valueLabels[$role] = $value
+
+        $roleForClick = $role
+        $swatch = New-FlyoutButton '' 302 $y 120 28 ({
+            $picker = [Windows.Forms.ColorDialog]::new()
+            $picker.FullOpen = $true
+            $picker.Color = [Drawing.ColorTranslator]::FromHtml([string]$colors[$roleForClick])
+            try {
+                if ($picker.ShowDialog($dialog) -eq [Windows.Forms.DialogResult]::OK) {
+                    $colors[$roleForClick] = ConvertTo-ThemeHex $picker.Color
+                    $swatches[$roleForClick].BackColor = $picker.Color
+                    $swatches[$roleForClick].FlatAppearance.MouseOverBackColor = $picker.Color
+                    $swatches[$roleForClick].FlatAppearance.MouseDownBackColor = $picker.Color
+                    $valueLabels[$roleForClick].Text = $colors[$roleForClick]
+                }
+            }
+            finally { $picker.Dispose() }
+        }.GetNewClosure())
+        $swatch.BackColor = [Drawing.ColorTranslator]::FromHtml($colors[$role])
+        $swatch.FlatAppearance.BorderColor = Get-ThemeColor 'border'
+        $swatch.FlatAppearance.MouseOverBackColor = $swatch.BackColor
+        $swatch.FlatAppearance.MouseDownBackColor = $swatch.BackColor
+        $list.Controls.Add($swatch)
+        $swatches[$role] = $swatch
+        $y += 34
+    }
+    $list.AutoScrollMinSize = [Drawing.Size]::new(0, $y + 8)
+
+    $reset = New-FlyoutButton 'Reset' 16 13 86 32 ({
+        $defaults = Get-ThemePalette 'custom'
+        foreach ($role in $roleLabels.Keys) {
+            $colors[$role] = $defaults[$role]
+            $swatches[$role].BackColor = [Drawing.ColorTranslator]::FromHtml($colors[$role])
+            $swatches[$role].FlatAppearance.MouseOverBackColor = $swatches[$role].BackColor
+            $swatches[$role].FlatAppearance.MouseDownBackColor = $swatches[$role].BackColor
+            $valueLabels[$role].Text = $colors[$role]
+        }
+    }.GetNewClosure())
+    $cancel = New-FlyoutButton 'Cancel' 275 13 82 32 ({ $dialog.DialogResult = [Windows.Forms.DialogResult]::Cancel }.GetNewClosure())
+    $save = New-FlyoutButton 'Save' 368 13 82 32 ({
+        $json = $colors | ConvertTo-Json -Compress
+        if (Invoke-ConfigCommand '--set-windows-custom-theme' -InputText $json) {
+            $dialog.DialogResult = [Windows.Forms.DialogResult]::OK
+        }
+    }.GetNewClosure()) -Primary
+    $footer.Controls.Add($reset)
+    $footer.Controls.Add($cancel)
+    $footer.Controls.Add($save)
+    $dialog.AcceptButton = $save
+    $dialog.CancelButton = $cancel
+    Set-ThemedDialog $dialog
+    foreach ($role in $roleLabels.Keys) {
+        $swatches[$role].BackColor = [Drawing.ColorTranslator]::FromHtml($colors[$role])
+        $swatches[$role].FlatAppearance.MouseOverBackColor = $swatches[$role].BackColor
+        $swatches[$role].FlatAppearance.MouseDownBackColor = $swatches[$role].BackColor
+    }
+
+    $previousAllowDeactivate = $script:AllowDeactivate
+    $script:AllowDeactivate = $true
+    $script:ModalDepth++
+    try { return $dialog.ShowDialog($script:Flyout) -eq [Windows.Forms.DialogResult]::OK }
+    finally {
+        $dialog.Dispose()
+        $script:ModalDepth--
+        $script:AllowDeactivate = $previousAllowDeactivate
+        if ($script:ModalDepth -eq 0 -and $script:RenderPending) {
+            $script:RenderPending = $false
+            Request-FlyoutRender
+        }
     }
 }
 
@@ -461,8 +870,11 @@ function Show-KeyPrompt {
     $dialog.Controls.Add($save)
     $dialog.AcceptButton = $save
     $dialog.CancelButton = $cancel
+    Set-ThemedDialog $dialog
 
+    $previousAllowDeactivate = $script:AllowDeactivate
     $script:AllowDeactivate = $true
+    $script:ModalDepth++
     try {
         $result = $dialog.ShowDialog($script:Flyout)
         if ($result -ne [Windows.Forms.DialogResult]::OK) { return $null }
@@ -475,20 +887,34 @@ function Show-KeyPrompt {
     }
     finally {
         $dialog.Dispose()
-        $script:AllowDeactivate = $false
+        $script:ModalDepth--
+        $script:AllowDeactivate = $previousAllowDeactivate
+        if ($script:ModalDepth -eq 0 -and $script:RenderPending) {
+            $script:RenderPending = $false
+            Request-FlyoutRender
+        }
     }
 }
 
 function Show-RemovePrompt {
     param($Service)
     if (-not $Service.Keyed) {
+        $previousAllowDeactivate = $script:AllowDeactivate
         $script:AllowDeactivate = $true
+        $script:ModalDepth++
         try {
             $answer = [Windows.Forms.MessageBox]::Show($script:Flyout, "Remove $($Service.Name) from Needle?", 'Needle', [Windows.Forms.MessageBoxButtons]::OKCancel, [Windows.Forms.MessageBoxIcon]::Question)
             if ($answer -eq [Windows.Forms.DialogResult]::OK) { return 'Keep' }
             return $null
         }
-        finally { $script:AllowDeactivate = $false }
+        finally {
+            $script:ModalDepth--
+            $script:AllowDeactivate = $previousAllowDeactivate
+            if ($script:ModalDepth -eq 0 -and $script:RenderPending) {
+                $script:RenderPending = $false
+                Request-FlyoutRender
+            }
+        }
     }
 
     $dialog = [Windows.Forms.Form]::new()
@@ -512,7 +938,10 @@ function Show-RemovePrompt {
     $dialog.Controls.Add($keep)
     $dialog.Controls.Add($delete)
     $dialog.CancelButton = $cancel
+    Set-ThemedDialog $dialog
+    $previousAllowDeactivate = $script:AllowDeactivate
     $script:AllowDeactivate = $true
+    $script:ModalDepth++
     try {
         $result = $dialog.ShowDialog($script:Flyout)
         if ($result -eq [Windows.Forms.DialogResult]::No) { return 'Keep' }
@@ -521,7 +950,12 @@ function Show-RemovePrompt {
     }
     finally {
         $dialog.Dispose()
-        $script:AllowDeactivate = $false
+        $script:ModalDepth--
+        $script:AllowDeactivate = $previousAllowDeactivate
+        if ($script:ModalDepth -eq 0 -and $script:RenderPending) {
+            $script:RenderPending = $false
+            Request-FlyoutRender
+        }
     }
 }
 
@@ -541,7 +975,7 @@ function Enable-Service {
     $changed = if ($service.Keyed -and -not $hasKey) { Set-ServiceKey $service } else { Invoke-ConfigCommand '--enable-service' $ServiceId }
     if ($changed) {
         Start-Refresh $true
-        Render-Flyout
+        Request-FlyoutRender
     }
 }
 
@@ -553,7 +987,7 @@ function Remove-Service {
     if (-not (Invoke-ConfigCommand '--disable-service' $ServiceId)) { return }
     if ($choice -eq 'Delete' -and -not (Invoke-ConfigCommand '--clear-service-key' $ServiceId)) { return }
     Start-Refresh $true
-    Render-Flyout
+    Request-FlyoutRender
 }
 
 function Open-Config {
@@ -592,7 +1026,7 @@ function Render-Header {
     if ($script:CurrentView -ne 'Usage') {
         $back = New-FlyoutButton '< Back' 8 8 68 31 {
             $script:CurrentView = 'Usage'
-            Render-Flyout
+            Request-FlyoutRender
         }
         $back.FlatAppearance.BorderSize = 0
         $script:Header.Controls.Add($back)
@@ -603,6 +1037,8 @@ function Render-Header {
     $title.Font = $script:UiTitleFont
     $title.Location = [Drawing.Point]::new($titleX, 13)
     $title.AutoSize = $true
+    $title.ForeColor = Get-ThemeColor 'text'
+    $title.BackColor = [Drawing.Color]::Transparent
     $script:Header.Controls.Add($title)
     $close = New-FlyoutButton 'X' 379 8 32 31 { Hide-Flyout }
     $close.FlatAppearance.BorderSize = 0
@@ -613,10 +1049,10 @@ function Render-UsageView {
     $config = Get-Config
     $enabledIds = @(Get-EnabledServiceIds $config)
     $providerColors = @{
-        claude = [Drawing.Color]::Chocolate
-        codex = [Drawing.Color]::SeaGreen
-        zai = [Drawing.Color]::RoyalBlue
-        openrouter = [Drawing.Color]::MediumOrchid
+        claude = Get-ThemeColor 'claude'
+        codex = Get-ThemeColor 'codex'
+        zai = Get-ThemeColor 'zai'
+        openrouter = Get-ThemeColor 'openrouter'
     }
     $providers = @()
     if ($script:Data) {
@@ -629,20 +1065,19 @@ function Render-UsageView {
 
     if ($providers.Count -eq 0) {
         $script:RenderY = 52
-        [void](Add-FlyoutText 'No services connected yet' 16 388 $script:UiTitleFont ([Drawing.Color]::FromArgb(45, 49, 57)) Center 8)
-        [void](Add-FlyoutText 'Use Add more to connect a service.' 40 340 $script:UiFont ([Drawing.Color]::DimGray) Center 22)
+        [void](Add-FlyoutText 'No services connected yet' 16 388 $script:UiTitleFont (Get-ThemeColor 'text') Center 8)
+        [void](Add-FlyoutText 'Use Add more to connect a service.' 40 340 $script:UiFont (Get-ThemeColor 'muted') Center 22)
         $add = New-FlyoutButton '+ Add more' 100 $script:RenderY 220 44 {
             $script:CurrentView = 'Add more'
-            Render-Flyout
+            Request-FlyoutRender
         } -Primary
         $script:Content.Controls.Add($add)
         $script:RenderY += 66
-        if ($script:ConfigError) { [void](Add-FlyoutText $script:ConfigError 32 356 $script:UiFont ([Drawing.Color]::Firebrick) Center 8) }
+        if ($script:ConfigError) { [void](Add-FlyoutText $script:ConfigError 32 356 $script:UiFont (Get-ThemeColor 'critical') Center 8) }
         $settings = New-FlyoutButton 'Settings' 100 $script:RenderY 220 34 {
             $script:CurrentView = 'Settings'
-            Render-Flyout
+            Request-FlyoutRender
         }
-        $settings.FlatAppearance.BorderSize = 0
         $script:Content.Controls.Add($settings)
         $script:RenderY += 44
         return
@@ -652,7 +1087,7 @@ function Render-UsageView {
         $id = [string](Get-Value $provider 'id' '')
         $name = [string](Get-Value $provider 'name' $id)
         $plan = [string](Get-Value $provider 'plan' '')
-        $color = if ($providerColors.ContainsKey($id)) { $providerColors[$id] } else { [Drawing.Color]::SlateGray }
+        $color = if ($providerColors.ContainsKey($id)) { $providerColors[$id] } else { Get-ThemeColor 'muted' }
         $title = if ($plan) { "$name ($plan)" } else { $name }
         $dot = [Windows.Forms.Panel]::new()
         $dot.Location = [Drawing.Point]::new(17, $script:RenderY + 4)
@@ -672,7 +1107,7 @@ function Render-UsageView {
             $tail = if ($detail) { $detail } elseif ($reset -and $pace) { "$reset | $pace" } elseif ($reset) { $reset } else { $pace }
             $row = '{0,-12} [{1}] {2,3}% left' -f ([string](Get-Value $window 'label' 'Limit')), $bar, [Math]::Round($left)
             if ($tail) { $row += " | $tail" }
-            [void](Add-FlyoutText $row 34 370 $script:UiMonoFont (Get-LevelColor $left) Left 5)
+            [void](Add-FlyoutText $row 34 370 $script:UiMonoFont (Get-LevelThemeColor $left) Left 5)
         }
 
         $balance = Get-Value $provider 'balance'
@@ -686,35 +1121,34 @@ function Render-UsageView {
             else {
                 $row = '{0}: ${1:N2} left of ${2:N2}' -f (Get-Value $balance 'label' 'Credits'), [double]$remaining, [double]$total
                 $percent = if ([double]$total -gt 0) { 100 * [double]$remaining / [double]$total } else { 0 }
-                [void](Add-FlyoutText $row 34 370 $script:UiMonoFont (Get-LevelColor $percent) Left 5)
+                [void](Add-FlyoutText $row 34 370 $script:UiMonoFont (Get-LevelThemeColor $percent) Left 5)
             }
         }
 
         $source = [string](Get-Value $provider 'source' '')
-        if ($source) { [void](Add-FlyoutText "Using $source" 34 370 $script:UiFont ([Drawing.Color]::DimGray) Left 5) }
+        if ($source) { [void](Add-FlyoutText "Using $source" 34 370 $script:UiFont (Get-ThemeColor 'muted') Left 5) }
         $errorText = [string](Get-Value $provider 'error' '')
         if ($errorText) {
-            [void](Add-FlyoutText ('! ' + $errorText) 34 370 $script:UiFont ([Drawing.Color]::Firebrick) Left 5)
+            [void](Add-FlyoutText ('! ' + $errorText) 34 370 $script:UiFont (Get-ThemeColor 'critical') Left 5)
         }
         Add-FlyoutDivider 7 10
     }
 
     if ($script:LastError) {
-        [void](Add-FlyoutText ('! ' + $script:LastError) 16 388 $script:UiFont ([Drawing.Color]::Firebrick) Left 8)
+        [void](Add-FlyoutText ('! ' + $script:LastError) 16 388 $script:UiFont (Get-ThemeColor 'critical') Left 8)
     }
     if ($providers.Count -lt $script:Services.Count) {
         $add = New-FlyoutButton '+ Add more' 16 $script:RenderY 388 38 {
             $script:CurrentView = 'Add more'
-            Render-Flyout
+            Request-FlyoutRender
         }
         $script:Content.Controls.Add($add)
         $script:RenderY += 46
     }
     $settings = New-FlyoutButton 'Settings' 16 $script:RenderY 388 34 {
         $script:CurrentView = 'Settings'
-        Render-Flyout
+        Request-FlyoutRender
     }
-    $settings.FlatAppearance.BorderSize = 0
     $script:Content.Controls.Add($settings)
     $script:RenderY += 44
 }
@@ -736,10 +1170,10 @@ function Render-AddServiceView {
     $available = @($script:Services | Where-Object { $_.Id -notin $connectedIds })
     if ($available.Count -eq 0) {
         $script:RenderY = 48
-        [void](Add-FlyoutText 'All services are connected.' 16 388 $script:UiBoldFont ([Drawing.Color]::DimGray) Center 10)
+        [void](Add-FlyoutText 'All services are connected.' 16 388 $script:UiBoldFont (Get-ThemeColor 'muted') Center 10)
         return
     }
-    [void](Add-FlyoutText 'Connect another service or retry an incomplete setup.' 16 388 $script:UiFont ([Drawing.Color]::DimGray) Left 12)
+    [void](Add-FlyoutText 'Connect another service or retry an incomplete setup.' 16 388 $script:UiFont (Get-ThemeColor 'muted') Left 12)
     foreach ($service in $available) {
         $idForClick = $service.Id
         $section = Get-Value $config $service.Id
@@ -754,12 +1188,12 @@ function Render-AddServiceView {
             $action = ({
                 if (Set-ServiceKey $serviceForKey) {
                     Start-Refresh $true
-                    Render-Flyout
+                    Request-FlyoutRender
                 }
             }.GetNewClosure())
         }
         elseif ($enabled) {
-            $action = ({ Start-Refresh $true; Render-Flyout }.GetNewClosure())
+            $action = ({ Start-Refresh $true; Request-FlyoutRender }.GetNewClosure())
         }
         else {
             $action = ({ Enable-Service $idForClick }.GetNewClosure())
@@ -774,17 +1208,17 @@ function Render-AddServiceView {
             $change = New-FlyoutButton 'Change key' 309 $script:RenderY 95 38 ({
                 if (Set-ServiceKey $serviceForKey) {
                     Start-Refresh $true
-                    Render-Flyout
+                    Request-FlyoutRender
                 }
             }.GetNewClosure())
             $script:Content.Controls.Add($change)
         }
         $script:RenderY += 42
-        [void](Add-FlyoutText $service.Description 28 364 $script:UiFont ([Drawing.Color]::DimGray) Left 13)
+        [void](Add-FlyoutText $service.Description 28 364 $script:UiFont (Get-ThemeColor 'muted') Left 13)
         $errorText = [string](Get-Value $provider 'error' '')
-        if ($errorText) { [void](Add-FlyoutText $errorText 28 364 $script:UiFont ([Drawing.Color]::Firebrick) Left 10) }
+        if ($errorText) { [void](Add-FlyoutText $errorText 28 364 $script:UiFont (Get-ThemeColor 'critical') Left 10) }
     }
-    if ($script:ConfigError) { [void](Add-FlyoutText $script:ConfigError 16 388 $script:UiFont ([Drawing.Color]::Firebrick) Left 8) }
+    if ($script:ConfigError) { [void](Add-FlyoutText $script:ConfigError 16 388 $script:UiFont (Get-ThemeColor 'critical') Left 8) }
 }
 
 function Render-SettingsView {
@@ -792,7 +1226,7 @@ function Render-SettingsView {
     $enabledIds = @(Get-EnabledServiceIds $config)
     [void](Add-FlyoutText 'Services' 16 388 $script:UiBoldFont ([Drawing.Color]::Empty) Left 8)
     if ($enabledIds.Count -eq 0) {
-        [void](Add-FlyoutText 'No services added.' 16 388 $script:UiFont ([Drawing.Color]::DimGray) Left 10)
+        [void](Add-FlyoutText 'No services added.' 16 388 $script:UiFont (Get-ThemeColor 'muted') Left 10)
     }
     foreach ($service in @($script:Services | Where-Object { $_.Id -in $enabledIds })) {
         [void](Add-FlyoutText $service.Name 20 190 $script:UiBoldFont ([Drawing.Color]::Empty) Left 5)
@@ -802,7 +1236,7 @@ function Render-SettingsView {
             $keyButton = New-FlyoutButton 'Change key' 218 $buttonY 91 30 ({
                 if (Set-ServiceKey $serviceForKey) {
                     Start-Refresh $true
-                    Render-Flyout
+                    Request-FlyoutRender
                 }
             }.GetNewClosure())
             $script:Content.Controls.Add($keyButton)
@@ -813,17 +1247,106 @@ function Render-SettingsView {
         $script:RenderY = [Math]::Max($script:RenderY, $buttonY + 38)
     }
     Add-FlyoutDivider 5 10
+    [void](Add-FlyoutText 'Display' 16 388 $script:UiBoldFont ([Drawing.Color]::Empty) Left 8)
+    [void](Add-FlyoutText 'Theme' 20 384 $script:UiFont ([Drawing.Color]::Empty) Left 5)
+    $windowsConfig = Get-Value $config 'windows'
+    $customTheme = Get-Value $windowsConfig 'custom_theme'
+    $themeMode = Get-WindowsThemeMode $config
+    $themeModeText = switch ($themeMode) {
+        'light' { 'Light' }
+        'dark' { 'Dark' }
+        'night' { 'Night' }
+        'custom' { 'Custom' }
+        default { 'System' }
+    }
+    $themeModeSelect = [Windows.Forms.ComboBox]::new()
+    $themeModeSelect.Location = [Drawing.Point]::new(20, $script:RenderY)
+    $themeModeSelect.Size = [Drawing.Size]::new(384, 30)
+    $themeModeSelect.DropDownStyle = [Windows.Forms.ComboBoxStyle]::DropDownList
+    $themeModeSelect.Font = $script:UiFont
+    $themeModeSelect.BackColor = Get-ThemeColor 'surface'
+    $themeModeSelect.ForeColor = Get-ThemeColor 'text'
+    foreach ($name in @('Light', 'System', 'Dark', 'Night', 'Custom')) { [void]$themeModeSelect.Items.Add($name) }
+    $themeModeSelect.SelectedItem = $themeModeText
+    $savedCustomTheme = $customTheme
+    $initialCustomPalette = Get-ThemePalette 'custom' $script:ThemePalette
+    $themeModeSelect.Add_SelectedIndexChanged(({
+        param($sender, $eventArgs)
+        try {
+            $selectedMode = ([string]$sender.SelectedItem).ToLowerInvariant()
+            if ($selectedMode -eq (Get-WindowsThemeMode (Get-Config))) { return }
+            if ($selectedMode -eq 'custom' -and -not (Test-CompleteThemePalette $savedCustomTheme)) {
+                [void](Show-CustomThemeEditor $initialCustomPalette)
+                Request-FlyoutRender
+                return
+            }
+            [void](Invoke-ConfigCommand '--set-windows-theme' $selectedMode)
+            Request-FlyoutRender
+        }
+        catch {
+            Request-FlyoutRender
+            Show-FlyoutMessage ("Could not change the theme: " + $_.Exception.Message)
+        }
+    }.GetNewClosure()))
+    $script:Content.Controls.Add($themeModeSelect)
+    $script:RenderY += 39
+    if ($themeMode -eq 'custom') {
+        $editorPalette = if (Test-CompleteThemePalette $customTheme) { Get-ThemePalette 'custom' $customTheme } else { $script:ThemePalette }
+        $editPalette = New-FlyoutButton 'Edit custom palette' 20 $script:RenderY 384 32 ({
+            [void](Show-CustomThemeEditor $editorPalette)
+            Request-FlyoutRender
+        }.GetNewClosure())
+        $script:Content.Controls.Add($editPalette)
+        $script:RenderY += 40
+    }
+    [void](Add-FlyoutText 'Tray hover limits' 20 384 $script:UiFont ([Drawing.Color]::Empty) Left 5)
+    $hoverMode = Get-TrayHoverPercentageMode $config
+    $hoverModeText = switch ($hoverMode) {
+        'hourly' { 'Hourly (5-hour)' }
+        'both' { 'Both' }
+        default { 'Weekly' }
+    }
+    $hoverModeSelect = [Windows.Forms.ComboBox]::new()
+    $hoverModeSelect.Location = [Drawing.Point]::new(20, $script:RenderY)
+    $hoverModeSelect.Size = [Drawing.Size]::new(384, 30)
+    $hoverModeSelect.DropDownStyle = [Windows.Forms.ComboBoxStyle]::DropDownList
+    $hoverModeSelect.Font = $script:UiFont
+    $hoverModeSelect.BackColor = Get-ThemeColor 'surface'
+    $hoverModeSelect.ForeColor = Get-ThemeColor 'text'
+    [void]$hoverModeSelect.Items.Add('Hourly (5-hour)')
+    [void]$hoverModeSelect.Items.Add('Weekly')
+    [void]$hoverModeSelect.Items.Add('Both')
+    $hoverModeSelect.SelectedItem = $hoverModeText
+    $hoverModeSelect.Add_SelectedIndexChanged({
+        param($sender, $eventArgs)
+        $selectedMode = switch ([string]$sender.SelectedItem) {
+            'Hourly (5-hour)' { 'hourly' }
+            'Both' { 'both' }
+            default { 'weekly' }
+        }
+        if ($selectedMode -eq (Get-TrayHoverPercentageMode)) { return }
+        if (Invoke-ConfigCommand '--set-tray-hover-percentage-mode' $selectedMode) {
+            Update-Tray
+        }
+        else {
+            Request-FlyoutRender
+        }
+    })
+    $script:Content.Controls.Add($hoverModeSelect)
+    $script:RenderY += 39
+    [void](Add-FlyoutText 'Hourly uses each provider''s 5-hour limit.' 20 384 $script:UiFont (Get-ThemeColor 'muted') Left 10)
+    Add-FlyoutDivider 0 10
     $refreshText = if ($script:RefreshProcess) { 'Refreshing...' } else { 'Refresh' }
     $refresh = New-FlyoutButton $refreshText 16 $script:RenderY 388 34 {
         Start-Refresh $false
-        Render-Flyout
+        Request-FlyoutRender
     }
     $refresh.Enabled = $null -eq $script:RefreshProcess
     $script:Content.Controls.Add($refresh)
     $script:RenderY += 40
     $force = New-FlyoutButton 'Refresh skipping cooldowns' 16 $script:RenderY 388 34 {
         Start-Refresh $true
-        Render-Flyout
+        Request-FlyoutRender
     }
     $force.Enabled = $null -eq $script:RefreshProcess
     $script:Content.Controls.Add($force)
@@ -840,6 +1363,8 @@ function Render-SettingsView {
     $startup.Size = [Drawing.Size]::new(384, 28)
     $startup.Checked = Test-Startup
     $startup.Font = $script:UiFont
+    $startup.BackColor = Get-ThemeColor 'background'
+    $startup.ForeColor = Get-ThemeColor 'text'
     $startup.Add_Click({
         param($sender, $eventArgs)
         try { Set-Startup $sender.Checked }
@@ -850,7 +1375,7 @@ function Render-SettingsView {
     })
     $script:Content.Controls.Add($startup)
     $script:RenderY += 37
-    if ($script:ConfigError) { [void](Add-FlyoutText $script:ConfigError 16 388 $script:UiFont ([Drawing.Color]::Firebrick) Left 8) }
+    if ($script:ConfigError) { [void](Add-FlyoutText $script:ConfigError 16 388 $script:UiFont (Get-ThemeColor 'critical') Left 8) }
     Add-FlyoutDivider 0 10
     $exit = New-FlyoutButton 'Exit Needle' 16 $script:RenderY 388 34 { [Windows.Forms.Application]::Exit() } -Danger
     $script:Content.Controls.Add($exit)
@@ -873,32 +1398,77 @@ function Position-Flyout {
     $script:Flyout.Location = [Drawing.Point]::new($x, $y)
 }
 
+function Request-FlyoutRender {
+    if ($script:ModalDepth -gt 0 -or $script:IsRendering) {
+        $script:RenderPending = $true
+        return
+    }
+    if ($script:RenderQueued -or $script:Flyout.IsDisposed) { return }
+    if (-not $script:Flyout.IsHandleCreated) {
+        $script:RenderPending = $true
+        return
+    }
+    $script:RenderQueued = $true
+    try {
+        [void]$script:Flyout.BeginInvoke([Action]{
+            $script:RenderQueued = $false
+            if ($script:ModalDepth -gt 0 -or $script:IsRendering) {
+                $script:RenderPending = $true
+                return
+            }
+            if (-not $script:Flyout.IsDisposed) {
+                try { Render-Flyout }
+                catch { Show-FlyoutMessage ("Could not update the flyout: " + $_.Exception.Message) }
+            }
+        })
+    }
+    catch {
+        $script:RenderQueued = $false
+        if (-not $script:Flyout.IsDisposed) { throw }
+    }
+}
+
 function Render-Flyout {
-    foreach ($control in @($script:Content.Controls)) { $control.Dispose() }
-    $script:Content.AutoScrollPosition = [Drawing.Point]::Empty
-    $script:RenderY = 16
-    Render-Header
-    switch ($script:CurrentView) {
-        'Add more' { Render-AddServiceView }
-        'Settings' { Render-SettingsView }
-        default { Render-UsageView }
+    if ($script:ModalDepth -gt 0 -or $script:IsRendering) {
+        $script:RenderPending = $true
+        return
     }
-    $contentHeight = $script:RenderY + 12
-    $anchor = if ($null -ne $script:FlyoutAnchor) { $script:FlyoutAnchor } else { [Windows.Forms.Cursor]::Position }
-    $screen = [Windows.Forms.Screen]::FromPoint($anchor)
-    $area = $screen.WorkingArea
-    $available = if ($script:FlyoutOpensUp) {
-        [Math]::Min($anchor.Y - 8, $area.Bottom) - $area.Top
+    $script:IsRendering = $true
+    try {
+        Set-ActiveTheme (Get-Config)
+        foreach ($control in @($script:Content.Controls)) { $control.Dispose() }
+        $script:Content.AutoScrollPosition = [Drawing.Point]::Empty
+        $script:RenderY = 16
+        Render-Header
+        switch ($script:CurrentView) {
+            'Add more' { Render-AddServiceView }
+            'Settings' { Render-SettingsView }
+            default { Render-UsageView }
+        }
+        $contentHeight = $script:RenderY + 12
+        $anchor = if ($null -ne $script:FlyoutAnchor) { $script:FlyoutAnchor } else { [Windows.Forms.Cursor]::Position }
+        $screen = [Windows.Forms.Screen]::FromPoint($anchor)
+        $area = $screen.WorkingArea
+        $available = if ($script:FlyoutOpensUp) {
+            [Math]::Min($anchor.Y - 8, $area.Bottom) - $area.Top
+        }
+        else {
+            $area.Bottom - [Math]::Max($anchor.Y + 8, $area.Top)
+        }
+        $maximum = [Math]::Max(1, [Math]::Min(620, $available))
+        $height = [Math]::Min($maximum, [Math]::Max(230, $contentHeight + $script:Header.Height))
+        $script:Flyout.ClientSize = [Drawing.Size]::new(420, $height)
+        $script:Content.AutoScrollMinSize = [Drawing.Size]::new(0, $contentHeight)
+        if ($script:Flyout.Visible) { Position-Flyout }
+        $script:Flyout.Invalidate()
     }
-    else {
-        $area.Bottom - [Math]::Max($anchor.Y + 8, $area.Top)
+    finally {
+        $script:IsRendering = $false
+        if ($script:ModalDepth -eq 0 -and $script:RenderPending) {
+            $script:RenderPending = $false
+            Request-FlyoutRender
+        }
     }
-    $maximum = [Math]::Max(1, [Math]::Min(620, $available))
-    $height = [Math]::Min($maximum, [Math]::Max(230, $contentHeight + $script:Header.Height))
-    $script:Flyout.ClientSize = [Drawing.Size]::new(420, $height)
-    $script:Content.AutoScrollMinSize = [Drawing.Size]::new(0, $contentHeight)
-    if ($script:Flyout.Visible) { Position-Flyout }
-    $script:Flyout.Invalidate()
 }
 
 function Hide-Flyout {
@@ -940,7 +1510,7 @@ function Update-Tray {
     $tooltip = if ($script:Data) { Get-Summary $script:Data } elseif ($script:RefreshProcess) { 'Needle - refreshing...' } elseif ($script:LastError) { 'Needle - error; click for details' } else { 'Needle' }
     if ($tooltip.Length -gt 63) { $tooltip = $tooltip.Substring(0, 63) }
     $script:Tray.Text = $tooltip
-    if ($script:Flyout.Visible) { Render-Flyout }
+    if ($script:Flyout.Visible) { Request-FlyoutRender }
 }
 
 function Start-Refresh {
@@ -963,7 +1533,7 @@ function Start-Refresh {
     $script:RefreshOutput = $script:RefreshProcess.StandardOutput.ReadToEndAsync()
     $script:RefreshError = $script:RefreshProcess.StandardError.ReadToEndAsync()
     $script:Tray.Text = 'Needle - refreshing...'
-    if ($script:Flyout.Visible) { Render-Flyout }
+    if ($script:Flyout.Visible) { Request-FlyoutRender }
 }
 
 $script:PollTimer = [Windows.Forms.Timer]::new()

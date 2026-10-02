@@ -4,7 +4,7 @@ A PineCompute project.
 
 Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you have left: a Cinnamon panel applet on Linux Mint, a SwiftBar menu-bar item on macOS, and a native system-tray app on Windows. All three use the same fetcher and settings format.
 
-The compact display reads like `C 58%   G 71%   Z 82%   $14`. Each percentage is the tighter of that service's 5-hour and weekly windows, so it answers "how much can I use right now." The display turns amber under 30% and red under 10%. Click it for the full breakdown.
+The compact display reads like `C 58%   G 71%   Z 82%   $14`, where `C` is Claude, `G` is ChatGPT/Codex, and `Z` is z.ai. Cinnamon and macOS show the tighter of each service's 5-hour and weekly windows, so the number answers "how much can I use right now." The display turns amber under 30% and red under 10%. Click it for the full breakdown.
 
 ## Install on Linux Mint
 
@@ -34,8 +34,16 @@ The colored fill is what's left. The thin tick is how much time is left in that 
 
 - Opening the popup refreshes on its own if the numbers are more than 5 minutes old.
 - Auto-refresh runs every 10 minutes by default. Cinnamon users can change it in Needle's **Settings** pane.
-- The Windows tray app also refreshes every 10 minutes and shows the compact summary when you hover over its icon.
+- The Windows tray app also refreshes every 10 minutes and shows the compact summary when you hover over its icon. Its **Settings** page can show the 5-hour limit, weekly limit, or both; the default is weekly. Both mode reads like `G 64%/H 71%/W`.
 - Claude is never asked more than once every 5 minutes, even if you click **Refresh** repeatedly. Anthropic backs off hard on frequent polling, and that backoff can slow Claude Code itself.
+
+## Themes
+
+The Windows flyout and Cinnamon popup support **Light**, **System**, **Dark**, **Night**, and **Custom** themes. System follows the operating system or Cinnamon theme, while Night uses a deeper blue-black palette. Custom exposes the complete Needle palette, including surfaces, text, status colors, and provider colors.
+
+- On Windows, open **Settings** and use the Theme picker under **Display**. **Edit custom palette** opens color controls for every palette role. Windows theme settings are stored under the `windows` section of `%APPDATA%\Needle\config.json`.
+- On Cinnamon, open Needle's **Settings**, choose **Theme**, and select a mode. **Edit custom palette** opens Cinnamon's native applet settings. These appearance settings stay local to the Cinnamon applet.
+- The macOS SwiftBar menu continues to follow macOS appearance because SwiftBar owns the menu surface.
 
 ## Terminal
 
