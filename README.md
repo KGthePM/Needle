@@ -41,9 +41,16 @@ The colored fill is what's left. The thin tick is how much time is left in that 
 ```bash
 python3 ~/.local/bin/needle --text     # readable summary
 python3 ~/.local/bin/needle --debug    # also prints raw API responses
+python3 ~/.local/bin/needle --update   # install the latest release
 ```
 
 On Windows, use `py "$HOME\.local\bin\needle" --text` in PowerShell.
+
+## Updating
+
+Once a day Needle checks GitHub for a new release. When there is one, an **Update to 1.x.x…** line shows up: in the menu on the Mac, at the top of the popup on Linux, and in the popup and right-click menu on Windows. Clicking it opens a terminal window that downloads the release and reruns the installer. Your keys and settings stay as they are, and it doesn't ask the setup questions again. From a terminal, `needle --update` does the same thing.
+
+To turn off the check, add `"check_updates": false` at the top level of `config.json`.
 
 ## If something looks off
 
@@ -93,3 +100,9 @@ The installer offers to start Needle when you sign in. To change that later, tur
 powershell -ExecutionPolicy Bypass -File .\windows\uninstall-windows.ps1          # Windows, keeps your keys
 # add -Purge to remove the keys too
 ```
+
+## Releasing
+
+1. Bump `VERSION` in `fetcher/needle.py`, `version` in `applet/needle@pinecompute/metadata.json` and `xbar.version` in `mac/needle.5m.py`.
+2. Commit and push.
+3. `gh release create v1.x.x --notes "One line on what's new"`. The first line of the notes that isn't a heading becomes the hover text on the update line.

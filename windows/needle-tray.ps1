@@ -258,6 +258,12 @@ function Update-Views {
     $tip = if ($script:Fatal) { "Needle: $($script:Fatal)" } elseif ($sum.Text) { $sum.Text } else { "Needle" }
     if ($tip.Length -gt 63) { $tip = $tip.Substring(0, 62) + $Ellipsis }  # NotifyIcon's limit
     $Tray.Text = $tip
+    if ($UpdateItem) {
+        $u = if ($script:Data) { $script:Data.update } else { $null }
+        $UpdateItem.Visible = [bool]$u
+        $UpdateSep.Visible = [bool]$u
+        if ($u) { $UpdateItem.Text = "Update to $($u.latest)$Ellipsis"; $UpdateItem.ToolTipText = $u.notes }
+    }
     if ($script:Popup) { Fill-Popup; Set-PopupPosition $script:Popup }
 }
 
@@ -449,6 +455,12 @@ function Fill-Popup {
     $refresh = New-Link "Refresh" $T.Fg 0 $null { Start-Fetch }
     $refresh.Margin = New-Object System.Windows.Forms.Padding((Px 12), (Px 2), 0, (Px 2))
     $foot.Controls.Add($refresh)
+    if ($script:Data -and $script:Data.update) {
+        $upd = New-Link "Update to $($script:Data.update.latest)" $T.Fg 0 $null { Start-Update }
+        $upd.Margin = New-Object System.Windows.Forms.Padding((Px 12), (Px 2), 0, (Px 2))
+        if ($script:Data.update.notes) { $Tips.SetToolTip($upd, $script:Data.update.notes) }
+        $foot.Controls.Add($upd)
+    }
     $stack.Controls.Add($foot)
     $stack.ResumeLayout()
 }
@@ -585,6 +597,13 @@ function Open-Debug {
     Start-Process powershell.exe -ArgumentList "-NoExit -NoProfile -Command `"$cmd`""
 }
 
+# The installer replaces this script and restarts the tray, so the window stays open to show how it went.
+function Start-Update {
+    if ($script:Popup) { $script:Popup.Close() }
+    $cmd = "& '{0}' '{1}' --update" -f ($Python -replace "'", "''"), ($Fetcher -replace "'", "''")
+    Start-Process powershell.exe -ArgumentList "-NoExit -NoProfile -Command `"$cmd`""
+}
+
 # ------------------------------------------------------------------ menu and start-up
 
 $Tray = New-Object System.Windows.Forms.NotifyIcon
@@ -598,6 +617,11 @@ function Add-MenuItem($Items, [string]$Text, [scriptblock]$OnClick) {
 }
 
 $Menu = New-Object System.Windows.Forms.ContextMenuStrip
+$UpdateItem = Add-MenuItem $Menu.Items "Update" { Start-Update }
+$UpdateItem.Visible = $false
+$UpdateSep = New-Object System.Windows.Forms.ToolStripSeparator
+$UpdateSep.Visible = $false
+[void]$Menu.Items.Add($UpdateSep)
 [void](Add-MenuItem $Menu.Items "Refresh" { Start-Fetch })
 $keys = Add-MenuItem $Menu.Items "Edit keys" $null
 foreach ($id in $KeySetup.Keys) {

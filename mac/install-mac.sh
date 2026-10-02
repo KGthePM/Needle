@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Installs the Needle SwiftBar plugin on macOS.
-# Usage: ./install-mac.sh [path/to/your/SwiftBar/plugin/folder]
+# Usage: ./install-mac.sh [--update] [path/to/your/SwiftBar/plugin/folder]
+#   --update replaces an existing install without asking anything (Needle's Update item uses it).
 set -euo pipefail
+
+UPDATE=0
+if [ "${1:-}" = "--update" ]; then UPDATE=1; shift; fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -59,7 +63,9 @@ chmod 600 "$CONF"
 install -m 755 "$HERE/$PLUGIN" "$PLUGIN_DIR/$PLUGIN"
 
 # 5. One-time Keychain permission for Claude's sign-in, so the menu bar never prompts later.
-if security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1; then
+if [ "$UPDATE" = 1 ]; then
+  :  # granted on the first install
+elif security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1; then
   echo
   echo "macOS will now ask to let \"security\" read your Claude Code sign-in."
   echo "Enter your password and click Always Allow so the menu bar can refresh on its own."
@@ -74,7 +80,8 @@ fi
 # 6. Open SwiftBar at login, so Needle is in the menu bar after a restart.
 SWIFTBAR_APP="$(mdfind "kMDItemCFBundleIdentifier == 'com.ameba.SwiftBar'" 2>/dev/null | head -1)"
 SWIFTBAR_APP="${SWIFTBAR_APP:-/Applications/SwiftBar.app}"
-LOGIN_ITEMS="$(osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null || true)"
+LOGIN_ITEMS="SwiftBar"  # an update doesn't ask again
+[ "$UPDATE" = 0 ] && LOGIN_ITEMS="$(osascript -e 'tell application "System Events" to get the name of every login item' 2>/dev/null || true)"
 if [ -d "$SWIFTBAR_APP" ] && [[ "$LOGIN_ITEMS" != *SwiftBar* ]]; then
   echo
   read -r -p "Open SwiftBar at login so Needle is there after a restart? [Y/n] " ANSWER || ANSWER=y
@@ -92,6 +99,7 @@ open -g "swiftbar://refreshallplugins" >/dev/null 2>&1 || true
 
 echo
 echo "Installed."
+[ "$UPDATE" = 1 ] && exit 0
 echo "  Plugin   $PLUGIN_DIR/$PLUGIN"
 echo "  Fetcher  $BIN"
 echo "  Keys     $CONF"

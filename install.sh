@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Installs the Needle applet for Cinnamon (Linux Mint).
+# Usage: ./install.sh [--update]   (--update: replace an existing install, skip the setup hints)
 set -euo pipefail
+
+UPDATE=0
+[ "${1:-}" = "--update" ] && UPDATE=1
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UUID="needle@pinecompute"
@@ -35,6 +39,7 @@ dbus-send --session --dest=org.Cinnamon.LookingGlass --type=method_call \
   string:"$UUID" string:'APPLET' >/dev/null 2>&1 || true
 
 echo "Installed."
+[ "$UPDATE" = 1 ] && exit 0
 echo
 echo "  Applet   $APPLET_DIR"
 echo "  Fetcher  $BIN"

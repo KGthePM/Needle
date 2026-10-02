@@ -37,6 +37,8 @@
 .aiu-fill-crit { background-color: #ea5f5f; }
 .aiu-tick { background-color: rgba(128, 128, 128, 0.95); border-radius: 1px; }
 
+.aiu-update { spacing: 8px; padding: 8px 0; border-top: 1px solid rgba(128, 128, 128, 0.2); }
+
 .aiu-note { font-size: 0.85em; padding-top: 6px; }
 .aiu-note-error { color: #e06464; }
 

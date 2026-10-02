@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.1</xbar.version>
+# <xbar.version>v1.2</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -214,6 +214,12 @@ def render_actions(data):
     sep()
     if data and data.get("updated"):
         item(f"Updated {ago(data['updated'])}", **SMALL)
+    update = (data or {}).get("update")
+    if update:
+        item(f"Update to {update['latest']}…", sfimage="arrow.down.circle", tooltip=update.get("notes") or None,
+             bash=PY, param1=str(FETCHER), param2="--update", terminal=True)
+        if update.get("url"):
+            item("--Release notes", href=update["url"])
     item("Refresh", refresh=True, sfimage="arrow.clockwise")
     item("Edit keys", sfimage="key")
     for pid, (name, _, _) in KEY_SETUP.items():

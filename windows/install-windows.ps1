@@ -2,8 +2,10 @@
 Installs the Needle tray app on Windows.
 Usage (from the Needle folder):
   powershell -ExecutionPolicy Bypass -File .\windows\install-windows.ps1
+  -Update replaces an existing install without asking anything (Needle's Update item uses it).
 Keep this file ASCII: Windows PowerShell 5.1 reads scripts without a BOM as ANSI.
 #>
+param([switch]$Update)
 $ErrorActionPreference = "Stop"
 
 $Here = $PSScriptRoot
@@ -35,7 +37,7 @@ function Find-Python {
 $Python = Find-Python
 if (-not $Python) {
     Write-Host "Needle needs Python 3, and it isn't installed yet."
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
+    if (-not $Update -and (Get-Command winget -ErrorAction SilentlyContinue)) {
         $answer = Read-Host "Install it now with winget? [Y/n]"
         if ($answer -notmatch "^[Nn]") {
             winget install -e --id Python.Python.3.12 --scope user
@@ -68,7 +70,7 @@ $TrayArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Tra
 # 4. Start at sign-in, so Needle is in the tray after a restart. An existing shortcut is
 #    refreshed quietly, in case Python moved.
 $wantShortcut = Test-Path -LiteralPath $Shortcut
-if (-not $wantShortcut) {
+if (-not $wantShortcut -and -not $Update) {
     Write-Host
     $answer = Read-Host "Start Needle when you sign in, so it's there after a restart? [Y/n]"
     $wantShortcut = $answer -notmatch "^[Nn]"
@@ -89,6 +91,7 @@ Start-Process -FilePath $PowerShell -ArgumentList $TrayArgs -WindowStyle Hidden
 
 Write-Host
 Write-Host "Installed."
+if ($Update) { exit 0 }
 Write-Host "  Tray     $Tray"
 Write-Host "  Fetcher  $Bin"
 Write-Host "  Keys     $Conf"

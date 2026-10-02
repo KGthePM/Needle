@@ -7,6 +7,7 @@ needle: one JSON snapshot of your Claude, Codex, z.ai and OpenRouter limits.
   needle --cached   print the last snapshot without touching the network
   needle --force    skip cooldowns for z.ai / OpenRouter (Claude and Codex keep a floor)
   needle --debug    also dump raw API responses to stderr
+  needle --update   download the latest release and rerun the installer
 
 Standard library only. Works on Linux, macOS and Windows.
 """
@@ -21,7 +22,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 TIMEOUT = 10
 
 CONFIG_PATH = Path(
@@ -309,6 +310,94 @@ PROVIDERS = [
 ]
 
 
+# ----------------------------------------------------------------- updates
+
+RELEASES_URL = "https://api.github.com/repos/KGthePM/Needle/releases/latest"
+UPDATE_EVERY = 86400
+
+
+def version_tuple(text):
+    try:
+        return tuple(int(part) for part in str(text).lstrip("vV").split("."))
+    except ValueError:
+        return ()
+
+
+def latest_release():
+    data = http_get(RELEASES_URL, {"User-Agent": f"needle/{VERSION}"})
+    # One-line summary: the first line of the notes that isn't a heading.
+    lines = [l.strip() for l in (data.get("body") or "").splitlines()]
+    notes = next((l.lstrip("*- ").strip() for l in lines if l and not l.startswith("#")), "")
+    return {
+        "latest": str(data.get("tag_name", "")).lstrip("vV"),
+        "url": data.get("html_url"),
+        "notes": notes,
+        "zipball": data.get("zipball_url"),
+    }
+
+
+def check_update(cfg, cache, cached_only=False):
+    """Last known release, refreshed at most once a day. Failures are quiet: try again tomorrow."""
+    info = cache.get("update_check") or {}
+    if cfg.get("check_updates", True) and not cached_only and time.time() - info.get("checked_at", 0) > UPDATE_EVERY:
+        info = {"checked_at": time.time()}
+        try:
+            info.update(latest_release())
+        except Exception as err:  # noqa: BLE001 - no release yet, offline, rate-limited
+            log(f"update check: {err!r}")
+    return info
+
+
+def update_available(info):
+    if version_tuple(info.get("latest")) > version_tuple(VERSION):
+        return {k: info.get(k) for k in ("latest", "url", "notes")}
+    return None
+
+
+def self_update():
+    import shutil
+    import tempfile
+    import zipfile
+
+    try:
+        release = latest_release()
+    except Exception as err:  # noqa: BLE001
+        print(f"Couldn't check for updates: {friendly(err, 'github')}")
+        return 1
+    if not update_available(release):
+        print(f"Needle {VERSION} is up to date.")
+        return 0
+    print(f"Updating Needle {VERSION} to {release['latest']}...")
+    tmp = Path(tempfile.mkdtemp(prefix="needle-update-"))
+    try:
+        archive = tmp / "needle.zip"
+        req = urllib.request.Request(release["zipball"], headers={"User-Agent": f"needle/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            archive.write_bytes(resp.read())
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(tmp)
+        root = next(p for p in tmp.iterdir() if p.is_dir())
+        if sys.platform == "win32":
+            cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                   "-File", str(root / "windows" / "install-windows.ps1"), "-Update"]
+        elif sys.platform == "darwin":
+            cmd = ["bash", str(root / "mac" / "install-mac.sh"), "--update"]
+        else:
+            cmd = ["bash", str(root / "install.sh"), "--update"]
+        code = subprocess.run(cmd).returncode
+    except Exception as err:  # noqa: BLE001
+        print(f"Update failed: {friendly(err, 'github')}")
+        return 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if code == 0:
+        cache = load_json(CACHE_PATH, {})
+        cache.pop("update_check", None)
+        write_cache(cache)
+        print(f"Needle is now {release['latest']}.")
+    return code
+
+
 # ----------------------------------------------------------------- main
 
 def snapshot(cfg, cache, cached_only=False, force=False):
@@ -389,6 +478,8 @@ def print_text(data):
         if p.get("error"):
             print(f"  ! {p['error']}")
         print()
+    if data.get("update"):
+        print(f"Update available: {data['update']['latest']} (run needle --update)")
 
 
 def main(argv):
@@ -397,6 +488,8 @@ def main(argv):
         print(VERSION)
         return 0
     DEBUG = "--debug" in argv
+    if "--update" in argv:
+        return self_update()
     cfg, config_error = {}, None
     if CONFIG_PATH.exists():
         try:
@@ -408,6 +501,10 @@ def main(argv):
             config_error = "Couldn't read the keys file."
     cache = load_json(CACHE_PATH, {})
     data = snapshot(cfg, cache, cached_only="--cached" in argv, force="--force" in argv)
+    data["update_check"] = check_update(cfg, cache, cached_only="--cached" in argv)
+    update = update_available(data["update_check"])
+    if update:
+        data["update"] = update
     if config_error:
         for p in data["providers"]:
             if p["id"] not in ("claude", "codex") and not p.get("windows") and not p.get("balance"):

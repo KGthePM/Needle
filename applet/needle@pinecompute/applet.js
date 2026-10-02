@@ -218,12 +218,14 @@ class AIUsageApplet extends Applet.TextIconApplet {
         };
         add("Refresh now (skip cooldowns)", () => this._refresh(true));
         add("Edit API keys", () => this._openConfig());
-        add("Open in terminal (debug)", () => {
-            const cmd = `python3 '${FETCHER}' --text --debug --force; echo; read -p 'Press Enter to close'`;
-            if (GLib.find_program_in_path("gnome-terminal")) Util.spawn(["gnome-terminal", "--", "bash", "-c", cmd]);
-            else Util.spawn(["x-terminal-emulator", "-e", `bash -c "${cmd}"`]);
-        });
+        add("Open in terminal (debug)", () => this._inTerminal("--text --debug --force"));
         this._applet_context_menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    }
+
+    _inTerminal(args) {
+        const cmd = `python3 '${FETCHER}' ${args}; echo; read -p 'Press Enter to close'`;
+        if (GLib.find_program_in_path("gnome-terminal")) Util.spawn(["gnome-terminal", "--", "bash", "-c", cmd]);
+        else Util.spawn(["x-terminal-emulator", "-e", `bash -c "${cmd}"`]);
     }
 
     _openConfig() {
@@ -290,6 +292,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         if (!this._cards) return;
         this._cards.get_children().forEach((c) => c.destroy());
         this._updated.text = this._data && this._data.updated ? `Updated ${ago(this._data.updated)}` : "";
+        if (this._data && this._data.update) this._cards.add(this._updateRow(this._data.update));
 
         if (this._fatal) {
             this._cards.add(this._note(this._fatal, true));
@@ -301,6 +304,15 @@ class AIUsageApplet extends Applet.TextIconApplet {
             return;
         }
         providers.forEach((p) => this._cards.add(this._card(p)));
+    }
+
+    _updateRow(update) {
+        const row = new St.BoxLayout({ style_class: "aiu-update" });
+        row.add(label(`Needle ${update.latest} is available`, "aiu-small"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
+        const btn = new St.Button({ label: "Update", style_class: "aiu-btn", can_focus: true, track_hover: true });
+        btn.connect("clicked", () => { this.menu.close(); this._inTerminal("--update"); });
+        row.add(btn);
+        return row;
     }
 
     _card(p) {
