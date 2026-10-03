@@ -63,6 +63,15 @@ This project is currently in `0.x` development. While the version remains below 
 
 Version `1.0.0` must only be used when the developers intentionally decide that the project has reached its first stable release.
 
+### One-Time Version History Correction
+
+The historical `v1.2.0` release was created before this version policy and is not
+considered part of the authoritative SemVer sequence.
+
+For the `Polished4Windows` promotion only, the project may reset from `1.2.0` to
+`0.7.0`. This exception does not permit any future version decrease or reuse.
+After this correction, normal version progression resumes from `0.7.0`.
+
 ### Required Check Before Every Push
 
 Before every push, the agent must:
@@ -72,7 +81,8 @@ Before every push, the agent must:
 3. Determine the highest SemVer increment justified by those changes.
 4. Update `VERSION` before pushing.
 5. Update and verify all required references to the project version so they remain consistent with `VERSION`.
-6. Never reuse or decrease a version number.
+6. Never reuse or decrease a version number, except for the documented one-time
+   version history correction above.
 7. Never arbitrarily bump the version beyond what the changes justify.
 
 If multiple types of changes are included, use the highest applicable increment.

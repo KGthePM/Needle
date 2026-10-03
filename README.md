@@ -85,6 +85,12 @@ In the menu, each bar is green, amber or red by how much is left, and the word a
 
 The installer offers to open SwiftBar at login, so Needle is back in the menu bar after a restart. Needle uses native **Add more** and **Settings** submenus on macOS. To change login behavior later, use **System Settings** > **General** > **Login Items**. On Linux the applet loads with the panel, so there's nothing to set.
 
+## Releasing
+
+1. Update the root `VERSION` file and keep the fetcher, Cinnamon metadata, and SwiftBar version references synchronized with it.
+2. Commit and push the release changes.
+3. Create a stable `vMAJOR.MINOR.PATCH` GitHub release from the intended release commit (pass `--target` when it is not the default branch). The first non-heading line of its notes becomes the update description.
+
 ## Uninstall
 
 ```bash

@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v0.6.1</xbar.version>
+# <xbar.version>v0.7.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
