@@ -249,7 +249,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
     }
 
     _openDebug() {
-        const cmd = `python3 '${FETCHER}' --text --debug --force; echo; read -p 'Press Enter to close'`;
+        this._inTerminal("--text --debug --force");
+    }
+
+    _inTerminal(args) {
+        const cmd = `python3 '${FETCHER}' ${args}; echo; read -p 'Press Enter to close'`;
         if (GLib.find_program_in_path("gnome-terminal")) Util.spawn(["gnome-terminal", "--", "bash", "-c", cmd]);
         else Util.spawn(["x-terminal-emulator", "-e", `bash -c "${cmd}"`]);
     }
@@ -509,6 +513,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         if (this._fatal) {
             cards.add(this._note(this._fatal, true));
         }
+        if (this._data && this._data.update) cards.add(this._updateRow(this._data.update));
         const enabled = this._enabledServices();
         const enabledIds = enabled.map((service) => service.id);
         const providers = ((this._data && this._data.providers) || []).filter(
@@ -528,6 +533,15 @@ class AIUsageApplet extends Applet.TextIconApplet {
             }
         }
         this._navButton("Settings", "aiu-nav-btn aiu-settings-btn", () => { this._view = "settings"; this._renderMenu(); });
+    }
+
+    _updateRow(update) {
+        const row = new St.BoxLayout({ style_class: "aiu-update" });
+        row.add(label(`Needle ${update.latest} is available`, "aiu-small"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
+        const btn = new St.Button({ label: "Update", style_class: "aiu-btn", can_focus: true, track_hover: true });
+        btn.connect("clicked", () => { this.menu.close(); this._inTerminal("--update"); });
+        row.add(btn);
+        return row;
     }
 
     _renderAddView() {

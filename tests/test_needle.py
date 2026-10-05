@@ -437,6 +437,63 @@ class ProviderTests(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt" and WINDOWS_POWERSHELLS, "PowerShell tray smoke test requires Windows")
+class UpdateTests(unittest.TestCase):
+    RELEASE = {"latest": "99.0.0", "url": "https://example.test/r", "notes": "New", "zipball": "z"}
+
+    def test_versions_agree_everywhere(self):
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        metadata = json.loads((ROOT / "applet" / "needle@pinecompute" / "metadata.json").read_text(encoding="utf-8"))
+        xbar = (ROOT / "mac" / "needle.5m.py").read_text(encoding="utf-8")
+        self.assertEqual(needle.VERSION, version)
+        self.assertEqual(metadata["version"], version)
+        self.assertIn(f"<xbar.version>v{version}</xbar.version>", xbar)
+
+    def test_update_available_compares_numerically(self):
+        with mock.patch.object(needle, "VERSION", "1.3.0"):
+            self.assertEqual(needle.update_available({"latest": "1.10.0"})["latest"], "1.10.0")
+            self.assertIsNone(needle.update_available({"latest": "1.3.0"}))
+            self.assertIsNone(needle.update_available({"latest": "1.2.9"}))
+            self.assertIsNone(needle.update_available({}))
+            self.assertIsNone(needle.update_available({"latest": "not-a-version"}))
+
+    def test_check_update_runs_at_most_daily(self):
+        fresh = {"checked_at": 1000, "latest": "1.0.0"}
+        with mock.patch.object(needle, "latest_release", return_value=self.RELEASE) as latest, \
+                mock.patch.object(needle.time, "time", return_value=1000 + 60):
+            self.assertEqual(needle.check_update({}, {"update_check": fresh}), fresh)
+            latest.assert_not_called()
+        with mock.patch.object(needle, "latest_release", return_value=self.RELEASE) as latest, \
+                mock.patch.object(needle.time, "time", return_value=1000 + needle.UPDATE_EVERY + 1):
+            self.assertEqual(needle.check_update({}, {"update_check": fresh})["latest"], "99.0.0")
+            latest.assert_called_once()
+
+    def test_check_update_can_be_turned_off_and_skips_cached_runs(self):
+        with mock.patch.object(needle, "latest_release", return_value=self.RELEASE) as latest:
+            self.assertEqual(needle.check_update({"check_updates": False}, {}), {})
+            self.assertEqual(needle.check_update({}, {}, cached_only=True), {})
+            latest.assert_not_called()
+
+    def test_check_update_failure_is_quiet_and_waits_a_day(self):
+        with mock.patch.object(needle, "latest_release", side_effect=OSError("offline")), \
+                mock.patch.object(needle.time, "time", return_value=5000):
+            self.assertEqual(needle.check_update({}, {}), {"checked_at": 5000})
+
+    def test_refresh_reports_update_and_saves_check(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            cache = temp / "usage.json"
+            output = io.StringIO()
+            with mock.patch.object(needle, "CONFIG_PATH", temp / "missing.json"), mock.patch.object(
+                needle, "CACHE_PATH", cache
+            ), mock.patch.object(needle, "PROVIDERS", []), mock.patch.object(
+                needle, "latest_release", return_value=self.RELEASE
+            ), contextlib.redirect_stdout(output):
+                self.assertEqual(needle.main([]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["update"], {"latest": "99.0.0", "url": "https://example.test/r", "notes": "New"})
+            self.assertEqual(json.loads(cache.read_text(encoding="utf-8"))["update_check"]["latest"], "99.0.0")
+
+
 class WindowsTrayTests(unittest.TestCase):
     def test_deferred_render_does_not_dispose_active_combobox(self):
         script = r'''

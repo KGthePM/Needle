@@ -50,9 +50,16 @@ The Windows flyout and Cinnamon popup support **Light**, **System**, **Dark**, *
 ```bash
 python3 ~/.local/bin/needle --text     # readable summary
 python3 ~/.local/bin/needle --debug    # also prints raw API responses
+python3 ~/.local/bin/needle --update   # install the latest release
 ```
 
 On Windows, choose **Settings** > **Debug in terminal** from the tray flyout.
+
+## Updating
+
+Once a day Needle checks GitHub for a new release. When there is one, an **Update to 1.x.x…** item shows up at the top of the menu on the Mac, and an **Update** button appears in the popup on Linux and Windows. Clicking it opens a terminal window that downloads the release and reruns the installer. Your keys and settings stay as they are, and it doesn't ask the setup questions again. From a terminal, `needle --update` does the same thing.
+
+To turn off the check, add `"check_updates": false` at the top level of `config.json`.
 
 ## If something looks off
 
@@ -89,6 +96,7 @@ The installer offers to open SwiftBar at login, so Needle is back in the menu ba
 
 1. Update the root `VERSION` file and keep the fetcher, Cinnamon metadata, and SwiftBar version references synchronized with it.
 2. Commit and push the release changes.
+   `tests/test_needle.py` fails if they drift apart.
 3. Create a stable `vMAJOR.MINOR.PATCH` GitHub release from the intended release commit (pass `--target` when it is not the default branch). The first non-heading line of its notes becomes the update description.
 
 ## Uninstall

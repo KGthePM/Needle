@@ -19,7 +19,7 @@ Examples include:
 - Performance improvements
 - Documentation corrections
 
-Example: `0.3.0` -> `0.3.1`.
+Example: `1.3.0` -> `1.3.1`.
 
 ### MINOR
 
@@ -33,13 +33,13 @@ Examples include:
 - Meaningful enhancements to existing features
 - New configuration capabilities
 
-Example: `0.3.1` -> `0.4.0`.
+Example: `1.3.1` -> `1.4.0`.
 
 Reset PATCH to `0` whenever MINOR is incremented.
 
 ### MAJOR
 
-Once the project has reached `1.0.0`, increment MAJOR for intentional breaking changes.
+Increment MAJOR for intentional breaking changes.
 
 Examples include:
 
@@ -52,16 +52,16 @@ Example: `1.4.2` -> `2.0.0`.
 
 Reset MINOR and PATCH to `0` whenever MAJOR is incremented.
 
-### Pre-1.0 Development
+### Post-1.0 Status
 
-This project is currently in `0.x` development. While the version remains below `1.0.0`:
+Version `1.2.0` was published as a GitHub release, and installed copies compare
+release tags against their own version to decide whether to offer an update. The
+project is therefore past `1.0.0`: never return to a `0.x` version, or existing
+installs will stop seeing updates.
 
 - Bug fixes increment PATCH.
 - Compatible new features increment MINOR.
-- Significant or breaking development changes should normally increment MINOR.
-- Do not automatically change the project to `1.0.0`.
-
-Version `1.0.0` must only be used when the developers intentionally decide that the project has reached its first stable release.
+- Intentional breaking changes increment MAJOR.
 
 ### Required Check Before Every Push
 
@@ -81,4 +81,4 @@ Examples:
 
 - Several bug fixes require a PATCH increment.
 - Bug fixes plus a new feature require a MINOR increment.
-- After `1.0.0`, new features plus a breaking change require a MAJOR increment.
+- New features plus a breaking change require a MAJOR increment.

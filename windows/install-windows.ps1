@@ -1,6 +1,9 @@
+# -Update replaces an existing install and keeps the current start-at-sign-in choice
+# (Needle's Update button uses it).
 param(
     [switch]$NoStartup,
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [switch]$Update
 )
 
 Set-StrictMode -Version Latest
@@ -78,6 +81,8 @@ if (-not $python) {
 $powerShell = Get-Command pwsh.exe -ErrorAction SilentlyContinue
 if (-not $powerShell) { $powerShell = Get-Command powershell.exe -ErrorAction Stop }
 
+if ($Update -and -not (Test-Path -LiteralPath $startup)) { $NoStartup = [switch]$true }
+
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 Stop-NeedleTray $sid
 
@@ -116,6 +121,7 @@ if (-not $NoLaunch) {
 }
 
 Write-Host 'Needle for Windows is installed.'
+if ($Update) { exit 0 }
 Write-Host "  Tray     $tray"
 Write-Host "  Fetcher  $fetcher"
 Write-Host "  Settings $config"

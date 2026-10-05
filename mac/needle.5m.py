@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v0.7.0</xbar.version>
+# <xbar.version>v1.3.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -297,6 +297,17 @@ def render_add_services(connected, enabled, stored_keys, providers, prominent=Fa
             item("----Change key…", **set_key_action(pid))
 
 
+def render_update(data):
+    update = (data or {}).get("update")
+    if not update:
+        return
+    item(f"Update to {update['latest']}…", sfimage="arrow.down.circle", tooltip=update.get("notes") or None,
+         bash=PY, param1=str(FETCHER), param2="--update", terminal=True)
+    if update.get("url"):
+        item("--Release notes", href=update["url"])
+    sep()
+
+
 def render_settings(data, enabled, stored_keys):
     item("Settings", sfimage="gearshape")
     if enabled:
@@ -434,6 +445,7 @@ def main():
     elif fatal:
         item(fatal, **SMALL)
 
+    render_update(data)
     render_add_services(connected, enabled, stored_keys, provider_map, prominent=not connected)
     render_settings(data, enabled, stored_keys)
 

@@ -1020,6 +1020,27 @@ function Start-DebugWindow {
     Start-Process -FilePath $script:PowerShellPath -ArgumentList $arguments
 }
 
+function Start-UpdateWindow {
+    $parts = @($script:Python.File) + @($script:Python.Prefix) + @($script:Fetcher) |
+        ForEach-Object { "'" + ([string]$_ -replace "'", "''") + "'" }
+    $command = '& ' + ($parts -join ' ') + ' --update'
+    $arguments = '-NoExit -NoProfile -ExecutionPolicy Bypass -Command ' + (Quote-ProcessArgument $command)
+    Start-Process -FilePath $script:PowerShellPath -ArgumentList $arguments
+}
+
+function Add-UpdateButton {
+    $update = if ($script:Data) { Get-Value $script:Data 'update' } else { $null }
+    if (-not $update) { return }
+    $button = New-FlyoutButton ('Update to {0}...' -f (Get-Value $update 'latest' '')) 16 $script:RenderY 388 34 {
+        Hide-Flyout
+        Start-UpdateWindow
+    } -Primary
+    $script:Content.Controls.Add($button)
+    $script:RenderY += 40
+    $notes = [string](Get-Value $update 'notes' '')
+    if ($notes) { [void](Add-FlyoutText $notes 16 388 $script:UiFont (Get-ThemeColor 'muted') Left 8) }
+}
+
 function Render-Header {
     foreach ($control in @($script:Header.Controls)) { $control.Dispose() }
     $titleX = 16
@@ -1074,6 +1095,7 @@ function Render-UsageView {
         $script:Content.Controls.Add($add)
         $script:RenderY += 66
         if ($script:ConfigError) { [void](Add-FlyoutText $script:ConfigError 32 356 $script:UiFont (Get-ThemeColor 'critical') Center 8) }
+        Add-UpdateButton
         $settings = New-FlyoutButton 'Settings' 100 $script:RenderY 220 34 {
             $script:CurrentView = 'Settings'
             Request-FlyoutRender
@@ -1145,6 +1167,7 @@ function Render-UsageView {
         $script:Content.Controls.Add($add)
         $script:RenderY += 46
     }
+    Add-UpdateButton
     $settings = New-FlyoutButton 'Settings' 16 $script:RenderY 388 34 {
         $script:CurrentView = 'Settings'
         Request-FlyoutRender
