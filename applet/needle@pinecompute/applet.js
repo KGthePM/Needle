@@ -67,6 +67,19 @@ function level(left) {
 }
 
 const LEVEL_COLOR = { warn: "#e9a93a", crit: "#ea5f5f" };
+const LOCAL_COLOR = "#34c58a"; // Local AI counts up, so it always wears the "good" color
+
+// 1234 -> 1.2K, 133000 -> 133K, 1200000 -> 1.2M
+function compact(n) {
+    n = Math.max(0, Math.floor(Number(n) || 0));
+    for (const [size, suffix] of [[1e9, "B"], [1e6, "M"], [1e3, "K"]]) {
+        if (n >= size) {
+            const v = n / size;
+            return `${v < 10 ? v.toFixed(1).replace(/\.0$/, "") : Math.round(v)}${suffix}`;
+        }
+    }
+    return String(n);
+}
 
 function duration(secs) {
     secs = Math.max(0, Math.floor(secs));
@@ -166,6 +179,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
             this.settings.bind(setting[0], setting[1], () => this._themeChanged());
         });
         this.settings.bind("notify", "notifyAlerts", () => {});
+        this.settings.bind("milestone-announced", "milestoneAnnounced", () => {});
+        this.settings.bind("local-collapsed", "localCollapsed", () => this._renderMenu());
 
         this.menuManager = new PopupMenu.PopupMenuManager(this);
         this.menu = new Applet.AppletPopupMenu(this, orientation);
@@ -476,11 +491,17 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._renderMenu();
     }
 
-    _renderPanel() {
+    // Services with data to show. Local AI needs no setup, so the fetcher alone decides.
+    _shownProviders() {
         const enabled = this._enabledServices().map((service) => service.id);
-        const providers = ((this._data && this._data.providers) || []).filter(
-            (provider) => enabled.indexOf(provider.id) !== -1 && this._providerConnected(provider)
+        return ((this._data && this._data.providers) || []).filter(
+            (provider) => (provider.id === "local" || enabled.indexOf(provider.id) !== -1) && this._providerConnected(provider)
         );
+    }
+
+    _renderPanel() {
+        const providers = this._shownProviders();
+        let localPart = null;
         const parts = [];
         const tips = [];
         let worst = "ok";
@@ -489,7 +510,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
         };
 
         for (const p of providers) {
-            if (p.windows && p.windows.length) {
+            if (p.tally) {
+                const t = p.tally;
+                localPart = `L ${compact(t.all_time)}↑`;
+                tips.push(`${p.name}\n  Today ${compact(t.today)}, this week ${compact(t.week)}, all time ${compact(t.all_time)}\n  Worth about ${money(t.est_cost)} at API prices (estimate)`);
+            } else if (p.windows && p.windows.length) {
                 const left = bindingLeft(p);
                 if (left !== null) {
                     const shown = this.showRemaining ? left : 100 - left;
@@ -516,10 +541,35 @@ class AIUsageApplet extends Applet.TextIconApplet {
             }
         }
 
-        this.set_applet_label(this.panelStyle === "icon" ? "" : parts.join("   "));
-        if (this._applet_label) this._applet_label.set_style(LEVEL_COLOR[worst] ? `color: ${LEVEL_COLOR[worst]};` : null);
+        const shown = localPart ? parts.concat([localPart]) : parts;
+        this.set_applet_label(this.panelStyle === "icon" ? "" : shown.join("   "));
+        if (this._applet_label) {
+            this._applet_label.set_style(LEVEL_COLOR[worst] ? `color: ${LEVEL_COLOR[worst]};` : null);
+            if (localPart && this.panelStyle !== "icon") {
+                // Only the Local AI part is green; the limits keep their warning color.
+                const esc = (text) => GLib.markup_escape_text(text, -1);
+                const lead = parts.length ? `${esc(parts.join("   "))}   ` : "";
+                this._applet_label.clutter_text.set_markup(`${lead}<span foreground="${LOCAL_COLOR}">${esc(localPart)}</span>`);
+            }
+        }
         this.set_applet_tooltip(tips.length ? tips.join("\n\n") : this._fatal || "Needle");
         this._checkAlerts(providers);
+        this._checkMilestone(providers);
+    }
+
+    // The fetcher reports each Local AI milestone on the one refresh that crossed it.
+    // The last value announced is kept in settings so a restart never repeats one.
+    _checkMilestone(providers) {
+        const local = providers.find((p) => p.id === "local");
+        const m = local && local.milestone;
+        if (!m || !(m.value > (this.milestoneAnnounced || 0))) return;
+        this.milestoneAnnounced = m.value;
+        if (!this.notifyAlerts) return;
+        try {
+            Util.spawn(["notify-send", "-u", "normal", "Needle", `${compact(m.value)} tokens run locally 🎉`]);
+        } catch (e) {
+            global.logError(`${UUID}: ${e}`);
+        }
     }
 
     // One desktop notification per provider the first time it drops to crit, and one
@@ -602,11 +652,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
             cards.add(this._note(this._fatal, true));
         }
         if (this._data && this._data.update) cards.add(this._updateRow(this._data.update));
-        const enabled = this._enabledServices();
-        const enabledIds = enabled.map((service) => service.id);
-        const providers = ((this._data && this._data.providers) || []).filter(
-            (provider) => enabledIds.indexOf(provider.id) !== -1 && this._providerConnected(provider)
-        );
+        const providers = this._shownProviders();
+        const services = providers.filter((p) => p.id !== "local");
         if (!providers.length) {
             const empty = new St.BoxLayout({ vertical: true, style_class: "aiu-empty" });
             empty.add(label("No services connected yet.", "aiu-empty-title"), { x_align: St.Align.MIDDLE });
@@ -616,7 +663,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
             cards.add(empty);
         } else {
             providers.forEach((p) => cards.add(this._card(p)));
-            if (providers.length < SERVICES.length) {
+            if (services.length < SERVICES.length) {
                 this._navButton("+  Add more", "aiu-nav-btn", () => { this._view = "add"; this._renderMenu(); });
             }
         }
@@ -768,7 +815,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
         if (has("aiu-add-large")) rules.push(`background-color: ${active ? palette.hover : palette.surface}`);
         if (has("aiu-key-entry")) rules.push(`background-color: ${palette.surface}`, `color: ${palette.text}`, `border-color: ${palette.border}`);
         if (has("aiu-track")) rules.push(`background-color: ${palette.track}`);
-        if (has("aiu-fill-ok")) rules.push(`background-color: ${palette.success}`);
+        if (has("aiu-fill-ok") || has("aiu-dot-local")) rules.push(`background-color: ${palette.success}`);
+        if (has("aiu-good")) rules.push(`color: ${palette.success}`);
         if (has("aiu-fill-warn")) rules.push(`background-color: ${palette.warning}`);
         if (has("aiu-fill-crit")) rules.push(`background-color: ${palette.critical}`);
         if (has("aiu-note-error") || has("aiu-danger")) rules.push(`color: ${palette.critical}`);
@@ -813,7 +861,23 @@ class AIUsageApplet extends Applet.TextIconApplet {
         head.add(new St.Widget({ style_class: `aiu-dot aiu-dot-${p.id}` }), { y_fill: false, y_align: St.Align.MIDDLE });
         head.add(label(p.name, "aiu-name"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
         if (p.plan) head.add(label(p.plan, "aiu-small", true), { y_fill: false, y_align: St.Align.MIDDLE });
-        card.add(head);
+
+        // Local AI folds down to one line: its name and the all-time total.
+        if (p.tally) {
+            const collapsed = !!this.localCollapsed;
+            if (collapsed) head.add(label(`${compact(p.tally.all_time)} ↑`, "aiu-pct aiu-good"), { y_fill: false, y_align: St.Align.MIDDLE });
+            head.add(label(collapsed ? "▸" : "▾", "aiu-small", true), { y_fill: false, y_align: St.Align.MIDDLE });
+            const toggle = new St.Button({ child: head, style_class: "aiu-collapse", x_fill: true, can_focus: true, track_hover: true });
+            toggle.connect("clicked", () => {
+                this.localCollapsed = !collapsed;
+                this._renderMenu();
+            });
+            card.add(toggle);
+            if (collapsed) return card;
+            this._tallyRows(p.tally).forEach((row) => card.add(row));
+        } else {
+            card.add(head);
+        }
 
         (p.windows || []).forEach((w) => card.add(this._windowRow(w)));
         if (p.balance) card.add(this._balanceRow(p.balance));
@@ -873,6 +937,27 @@ class AIUsageApplet extends Applet.TextIconApplet {
             box.add(this._bar(frac, level(frac * 100), null), { x_fill: false, x_align: St.Align.START });
         }
         return box;
+    }
+
+    // Local AI counts up: totals, top models and a price estimate, never a gauge.
+    _tallyRows(t) {
+        const rows = [];
+        const line = (name, value) => {
+            const row = new St.BoxLayout({ style_class: "aiu-row" });
+            row.add(label(name, "aiu-label"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
+            row.add(label(value, "aiu-pct aiu-good"), { y_fill: false, y_align: St.Align.MIDDLE });
+            return row;
+        };
+        const box = new St.BoxLayout({ vertical: true, style_class: "aiu-window" });
+        box.add(line("Today", `${compact(t.today)} tokens`));
+        box.add(line("This week", `${compact(t.week)} tokens`));
+        box.add(line("All time", `${compact(t.all_time)} tokens ↑`));
+        rows.push(box);
+        if (t.top_models && t.top_models.length) {
+            rows.push(this._note(`Top: ${t.top_models.map((m) => `${m.model} ${compact(m.tokens)}`).join(", ")}`, false));
+        }
+        rows.push(this._note(`Worth about ${money(t.est_cost)} at API prices (estimate)`, false));
+        return rows;
     }
 
     _bar(frac, lvl, tick) {

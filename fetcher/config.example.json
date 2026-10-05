@@ -20,6 +20,11 @@
     "_note": "A management key shows your account balance. A regular key shows that key's own limit.",
     "api_key": ""
   },
+  "local": {
+    "enabled": true,
+    "_note": "Counts tokens you run on local models (Ollama's log, OpenCode). price_per_million is in USD and only feeds the estimate.",
+    "price_per_million": { "input": 1.00, "output": 5.00 }
+  },
   "windows": {
     "tray_hover_percentage_mode": "weekly",
     "theme": "system"

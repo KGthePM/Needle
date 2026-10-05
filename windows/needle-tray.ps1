@@ -434,6 +434,28 @@ function New-GaugeIcon {
     }
 }
 
+# 1234 -> 1.2K, 133000 -> 133K, 1200000 -> 1.2M
+function Format-Compact {
+    param($Value)
+    $n = [Math]::Max(0.0, [double]$Value)
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    foreach ($step in @(@(1e9, 'B'), @(1e6, 'M'), @(1e3, 'K'))) {
+        if ($n -ge $step[0]) {
+            $v = $n / $step[0]
+            $text = if ($v -lt 10) { [Math]::Round($v, 1, [MidpointRounding]::AwayFromZero).ToString('0.#', $culture) } else { [Math]::Round($v, [MidpointRounding]::AwayFromZero).ToString('0', $culture) }
+            return $text + $step[1]
+        }
+    }
+    return ([Math]::Floor($n)).ToString('0', $culture)
+}
+
+# Local AI needs no setup: it shows once the fetcher has found some local usage.
+function Test-ProviderShown {
+    param($Provider, $EnabledIds)
+    $id = [string](Get-Value $Provider 'id' '')
+    return ($id -eq 'local' -or $id -in $EnabledIds) -and (Test-ProviderConnected $Provider)
+}
+
 function Get-Summary {
     param($Data)
     $tags = @{ claude = 'C'; codex = 'G'; zai = 'Z' }
@@ -443,7 +465,12 @@ function Get-Summary {
     $mode = Get-TrayHoverPercentageMode $config
     foreach ($provider in @(Get-Value $Data 'providers' @())) {
         $providerId = [string](Get-Value $provider 'id' '')
-        if ($providerId -notin $enabledIds -or -not (Test-ProviderConnected $provider)) { continue }
+        if (-not (Test-ProviderShown $provider $enabledIds)) { continue }
+        $tally = Get-Value $provider 'tally'
+        if ($tally) {
+            $parts += 'L ' + (Format-Compact (Get-Value $tally 'all_time' 0)) + [char]0x2191
+            continue
+        }
         $tag = if ($tags.ContainsKey($providerId)) { $tags[$providerId] } else { ([string](Get-Value $provider 'name' '?')).Substring(0, 1) }
         $windowLabels = switch ($mode) {
             'hourly' { @('5-hour') }
@@ -543,6 +570,7 @@ $script:IsRendering = $false
 $script:RenderQueued = $false
 $script:RenderPending = $false
 $script:LastFlyoutClose = 0
+$script:LocalCollapsed = $false
 $script:FlyoutAnchor = $null
 $script:FlyoutOpensUp = $true
 $script:Services = @(
@@ -1149,15 +1177,17 @@ function Render-UsageView {
         codex = Get-ThemeColor 'codex'
         zai = Get-ThemeColor 'zai'
         openrouter = Get-ThemeColor 'openrouter'
+        local = Get-ThemeColor 'success'
     }
     $providers = @()
     if ($script:Data) {
         $providers = @(
             foreach ($provider in @(Get-Value $script:Data 'providers' @())) {
-                if ([string](Get-Value $provider 'id' '') -in $enabledIds -and (Test-ProviderConnected $provider)) { $provider }
+                if (Test-ProviderShown $provider $enabledIds) { $provider }
             }
         )
     }
+    $serviceCount = @($providers | Where-Object { [string](Get-Value $_ 'id' '') -ne 'local' }).Count
 
     if ($providers.Count -eq 0) {
         $script:RenderY = 52
@@ -1191,7 +1221,25 @@ function Render-UsageView {
         $dot.Size = [Drawing.Size]::new(10, 10)
         $dot.BackColor = $color
         $script:Content.Controls.Add($dot)
-        [void](Add-FlyoutText $title 34 370 $script:UiBoldFont ([Drawing.Color]::Empty) Left 8)
+        $tally = Get-Value $provider 'tally'
+        if ($tally) {
+            # Local AI folds down to one line: click its title to show or hide the breakdown.
+            $arrow = if ($script:LocalCollapsed) { [char]0x25B8 } else { [char]0x25BE }
+            $total = if ($script:LocalCollapsed) { '   ' + (Format-Compact (Get-Value $tally 'all_time' 0)) + [char]0x2191 } else { '' }
+            $titleLabel = Add-FlyoutText "$title$total  $arrow" 34 370 $script:UiBoldFont ([Drawing.Color]::Empty) Left 8
+            $titleLabel.Cursor = [Windows.Forms.Cursors]::Hand
+            $titleLabel.Add_Click({
+                $script:LocalCollapsed = -not $script:LocalCollapsed
+                Request-FlyoutRender
+            })
+            if ($script:LocalCollapsed) {
+                Add-FlyoutDivider 7 10
+                continue
+            }
+        }
+        else {
+            [void](Add-FlyoutText $title 34 370 $script:UiBoldFont ([Drawing.Color]::Empty) Left 8)
+        }
 
         foreach ($window in @(Get-Value $provider 'windows' @())) {
             $left = 100.0 - [double](Get-Value $window 'used' 100)
@@ -1228,6 +1276,23 @@ function Render-UsageView {
             }
         }
 
+        # Local AI counts up: totals, top models and a price estimate, always in the success color.
+        if ($tally) {
+            $good = Get-ThemeColor 'success'
+            foreach ($pair in @(@('Today', 'today'), @('This week', 'week'), @('All time', 'all_time'))) {
+                $row = '{0,-12} {1,6} tokens' -f $pair[0], (Format-Compact (Get-Value $tally $pair[1] 0))
+                [void](Add-FlyoutText $row 34 370 $script:UiMonoFont $good Left 5)
+            }
+            $top = @(Get-Value $tally 'top_models' @())
+            if ($top.Count -gt 0) {
+                $names = @($top | ForEach-Object { '{0} {1}' -f (Get-Value $_ 'model' '?'), (Format-Compact (Get-Value $_ 'tokens' 0)) })
+                [void](Add-FlyoutText ('Top: ' + ($names -join ', ')) 34 370 $script:UiFont (Get-ThemeColor 'muted') Left 5)
+            }
+            $cost = [double](Get-Value $tally 'est_cost' 0)
+            $estimate = 'Worth about ${0} at API prices (estimate)' -f $cost.ToString('0.00', [Globalization.CultureInfo]::InvariantCulture)
+            [void](Add-FlyoutText $estimate 34 370 $script:UiFont (Get-ThemeColor 'muted') Left 5)
+        }
+
         $source = [string](Get-Value $provider 'source' '')
         if ($source) { [void](Add-FlyoutText "Using $source" 34 370 $script:UiFont (Get-ThemeColor 'muted') Left 5) }
         $errorText = [string](Get-Value $provider 'error' '')
@@ -1245,7 +1310,7 @@ function Render-UsageView {
     if ($script:LastError) {
         [void](Add-FlyoutText ('! ' + $script:LastError) 16 388 $script:UiFont (Get-ThemeColor 'critical') Left 8)
     }
-    if ($providers.Count -lt $script:Services.Count) {
+    if ($serviceCount -lt $script:Services.Count) {
         $add = New-FlyoutButton '+ Add more' 16 $script:RenderY 388 38 {
             $script:CurrentView = 'Add more'
             Request-FlyoutRender
@@ -1653,6 +1718,7 @@ function Show-Flyout {
 # One notification per provider the first time it drops to 10% or less, and one more
 # when it's back above 10%. Nothing repeats while it sits there.
 function Update-Alerts {
+    param([string[]]$Extra = @())
     if (-not $script:Data) { return }
     $config = Get-Config
     if ($false -eq (Get-Value $config 'notify' $true)) {
@@ -1684,10 +1750,27 @@ function Update-Alerts {
         if (-not $lefts.ContainsKey($id)) { $script:Alerted.Remove($id) }
     }
     # A second balloon replaces the first, so everything goes in one.
-    $lines = @($low) + @($back)
+    $lines = @($low) + @($back) + @($Extra | Where-Object { $_ })
     if ($lines.Count -eq 0) { return }
     $icon = if ($low.Count) { [Windows.Forms.ToolTipIcon]::Warning } else { [Windows.Forms.ToolTipIcon]::Info }
     $script:Tray.ShowBalloonTip(10000, 'Needle', ($lines -join "`n"), $icon)
+}
+
+# The fetcher reports a Local AI milestone on the one refresh that crossed it. The
+# biggest one announced is kept in a file so a restart never repeats it. Returns the
+# line to announce, or nothing.
+function Update-Milestone {
+    if (-not $script:Data) { return }
+    $local = @(Get-Value $script:Data 'providers' @()) | Where-Object { [string](Get-Value $_ 'id' '') -eq 'local' } | Select-Object -First 1
+    $milestone = Get-Value $local 'milestone'
+    if (-not $milestone) { return }
+    $value = [double](Get-Value $milestone 'value' 0)
+    $path = Join-Path (Split-Path -Parent $script:CachePath) 'tray-milestone.json'
+    $announced = 0.0
+    try { if (Test-Path -LiteralPath $path) { $announced = [double](Get-Content -LiteralPath $path -Raw) } } catch { $announced = 0.0 }
+    if ($value -le $announced) { return }
+    try { Set-Content -LiteralPath $path -Value ([string][long]$value) -Encoding ASCII } catch { }
+    return '{0} tokens run locally!' -f (Format-Compact $value)
 }
 
 function Update-Tray {
@@ -1755,7 +1838,7 @@ $script:PollTimer.Add_Tick({
         else {
             try { $script:Data = $stdout | ConvertFrom-Json }
             catch { $script:LastError = 'The fetcher returned unreadable data.' }
-            if (-not $script:LastError) { Update-Alerts }
+            if (-not $script:LastError) { Update-Alerts -Extra @(Update-Milestone) }
         }
     }
     finally {

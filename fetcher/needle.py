@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-needle: one JSON snapshot of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits.
+needle: one JSON snapshot of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits,
+plus a running count of the tokens you run on local models.
 
   needle            refresh (respects per-provider cooldowns), print JSON
   needle --text     same, but a readable table for the terminal
@@ -32,7 +33,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 TIMEOUT = 10
 
 
@@ -58,7 +59,7 @@ CACHE_PATH = Path(os.environ.get("NEEDLE_CACHE") or _DEFAULT_CACHE).expanduser()
 # hard if polled too often (and that backoff can hit Claude Code itself), so Claude
 # has a 5-minute floor that --force does not bypass. Codex's endpoint is ChatGPT's own
 # backend, so it gets a short floor too.
-COOLDOWN = {"claude": 300, "codex": 300, "zai": 60, "openrouter": 60}
+COOLDOWN = {"claude": 300, "codex": 300, "zai": 60, "openrouter": 60, "local": 60}
 HARD_FLOOR = {"claude": 300, "codex": 60}
 
 FIVE_HOURS = 5 * 3600
@@ -414,14 +415,325 @@ def fetch_openrouter(cfg):
     return {"balance": {"label": "Key limit", "remaining": round(remaining, 2), "total": round(float(limit), 2)}}
 
 
+# ----------------------------------------------------------------- local AI
+#
+# Counts tokens run on local models instead of a limit that runs down. Sources are
+# read-only: Ollama's own server log (the systemd journal on Linux, server.log on Mac
+# and Windows) and OpenCode's message store for local providers. A running tally lives
+# in local.json next to the cache, with a bookmark per source so each fetch only adds
+# what is new. Callers hold cache_lock, so two fetches never count the same line.
+
+LOCAL_MILESTONES = (100_000, 1_000_000, 10_000_000, 100_000_000)
+LOCAL_PRICE = {"input": 1.00, "output": 5.00}  # USD per million tokens, about a small hosted model
+LOCAL_PROVIDER_IDS = {"ollama", "lmstudio", "llamacpp", "llama.cpp", "llama-cpp", "vllm"}
+JOURNAL_TIMEOUT = 100       # the first read scans the whole journal; later reads resume from a cursor
+OPENCODE_SETTLE_MS = 3600 * 1000  # an unfinished message newer than this is read again next time
+
+PROMPT_EVAL = re.compile(r"prompt eval time =\s*[\d.]+ ms /\s*(\d+) tokens")
+GEN_EVAL = re.compile(r"(?<!prompt )\beval time =\s*[\d.]+ ms /\s*(\d+) tokens")
+MODEL_LINE = re.compile(r'template selection"? model=(\S+)')
+LOG_TIME = re.compile(r"time=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)?)")
+GIN_TIME = re.compile(r"\[GIN\] (\d{4})/(\d\d)/(\d\d) - (\d\d):(\d\d):(\d\d)")
+
+
+def local_path():
+    return CACHE_PATH.with_name("local.json")
+
+
+def local_day(ts):
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+
+
+def short_model(name):
+    for prefix in ("registry.ollama.ai/library/", "registry.ollama.ai/"):
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
+def tally_add(store, ts, model, tokens_in, tokens_out):
+    if not (tokens_in or tokens_out):
+        return
+    day = store.setdefault("days", {}).setdefault(local_day(ts), {})
+    row = day.setdefault(model or "unknown", {"in": 0, "out": 0})
+    row["in"] += int(tokens_in or 0)
+    row["out"] += int(tokens_out or 0)
+
+
+def parse_ollama_lines(lines, store, state, stamp):
+    """Add token counts from Ollama log lines. `stamp(line)` returns the line's time or None.
+
+    The model comes from the last "template selection" line before a request, which is
+    exact with one model loaded at a time and close enough otherwise. It is kept in
+    `state` so a request read in a later fetch still knows its model.
+    """
+    for line in lines:
+        ts = stamp(line)
+        if ts is not None:
+            state["last_ts"] = ts
+        ts = state.get("last_ts") or time.time()
+        m = MODEL_LINE.search(line)
+        if m:
+            state["model"] = short_model(m.group(1))
+            continue
+        m = PROMPT_EVAL.search(line)
+        if m:
+            tally_add(store, ts, state.get("model"), int(m.group(1)), 0)
+        else:
+            m = GEN_EVAL.search(line)
+            if not m:
+                continue
+            tally_add(store, ts, state.get("model"), 0, int(m.group(1)))
+        sources = store.setdefault("sources", {})
+        if not sources.get("ollama_since"):
+            sources["ollama_since"] = ts
+
+
+def journal_stamp(line):
+    try:
+        return datetime.fromisoformat(line.split(" ", 1)[0]).timestamp()
+    except ValueError:
+        return None
+
+
+def read_ollama_journal(store):
+    """Read new Ollama lines from the systemd journal. Returns False when there is no journal."""
+    state = store.setdefault("sources", {}).setdefault("journal", {})
+    cmd = ["journalctl", "-u", "ollama", "-o", "short-iso", "--no-pager", "--show-cursor",
+           "-g", "eval time =|template selection"]
+    if state.get("cursor"):
+        cmd.append(f"--after-cursor={state['cursor']}")
+    elif state.get("scanned_at"):
+        # An earlier scan found nothing to count; don't scan the whole journal again.
+        cmd.append(f"--since=@{int(state['scanned_at'])}")
+    started = time.time()
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                             timeout=JOURNAL_TIMEOUT, check=False)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        log(f"local: journalctl: {err!r}")
+        return bool(state.get("cursor"))
+    if out.returncode not in (0, 1):  # 1 just means nothing matched
+        log(f"local: journalctl exited {out.returncode}: {out.stderr.strip()}")
+        return bool(state.get("cursor"))
+    lines = []
+    for line in out.stdout.splitlines():
+        if line.startswith("-- cursor: "):
+            state["cursor"] = line[len("-- cursor: "):].strip()
+        elif not line.startswith("-- "):
+            lines.append(line)
+    if not state.get("cursor"):
+        state["scanned_at"] = started
+    parse_ollama_lines(lines, store, state, journal_stamp)
+    return bool(state.get("cursor"))
+
+
+def ollama_log_path(platform=None, environ=None, home=None):
+    platform = platform or sys.platform
+    environ = os.environ if environ is None else environ
+    home = Path.home() if home is None else Path(home)
+    if platform == "win32":
+        return Path(environ.get("LOCALAPPDATA") or home / "AppData" / "Local") / "Ollama" / "server.log"
+    return home / ".ollama" / "logs" / "server.log"
+
+
+def file_stamp(line):
+    m = LOG_TIME.search(line)
+    if m:
+        try:
+            return datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    m = GIN_TIME.search(line)
+    if m:
+        return datetime(*map(int, m.groups())).timestamp()
+    return None
+
+
+def read_ollama_log(store, path):
+    """Read what Ollama appended to server.log since last time. A shrunk or replaced file
+    (rotation) is read again from the start."""
+    state = store.setdefault("sources", {}).setdefault("ollama_log", {})
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(64).hex()
+            offset = state.get("offset", 0)
+            size = os.fstat(handle.fileno()).st_size
+            old_head = state.get("head", "")
+            if state.get("path") != str(path) or size < offset or not head.startswith(old_head):
+                offset = 0
+            handle.seek(offset)
+            chunk = handle.read()
+    except OSError as err:
+        log(f"local: {path}: {err!r}")
+        return False
+    end = chunk.rfind(b"\n") + 1  # leave a half-written last line for next time
+    text = chunk[:end].decode("utf-8", "replace")
+    parse_ollama_lines(text.splitlines(), store, state, file_stamp)
+    state.update({"path": str(path), "offset": offset + end, "head": head})
+    return True
+
+
+def opencode_dir(environ=None, home=None):
+    environ = os.environ if environ is None else environ
+    home = Path.home() if home is None else Path(home)
+    return Path(environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "opencode"
+
+
+def opencode_rows(root, since_ms):
+    """Yield (id, created_ms, message) for OpenCode messages created at or after since_ms."""
+    db = root / "opencode.db"
+    if db.exists():
+        import sqlite3
+        uri = db.resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=2)
+        try:
+            rows = conn.execute(
+                "SELECT id, time_created, data FROM message WHERE time_created >= ? ORDER BY time_created, id",
+                (since_ms,),
+            ).fetchall()
+        finally:
+            conn.close()
+        for mid, created, data in rows:
+            try:
+                yield mid, int(created), json.loads(data)
+            except (TypeError, ValueError):
+                continue
+        return
+    found = []
+    for path in (root / "storage" / "message").glob("*/*.json"):
+        msg = load_json(path, None)
+        if not isinstance(msg, dict):
+            continue
+        created = (msg.get("time") or {}).get("created") or 0
+        if created >= since_ms:
+            found.append((msg.get("id") or path.stem, int(created), msg))
+    found.sort(key=lambda row: (row[1], row[0]))
+    yield from found
+
+
+def read_opencode(store, root, now_ms=None):
+    """Add tokens from OpenCode messages that went to a local provider.
+
+    Messages to Ollama after its log started recording token counts are skipped: the
+    log already counted them.
+    """
+    state = store.setdefault("sources", {}).setdefault("opencode", {})
+    since = state.get("last_created", 0)
+    seen = set(state.get("ids_at_last", []))
+    now_ms = now_ms if now_ms is not None else time.time() * 1000
+    ollama_since = store["sources"].get("ollama_since")
+    try:
+        rows = list(opencode_rows(root, since))
+    except Exception as err:  # noqa: BLE001 - a locked or odd database just means "not now"
+        log(f"local: opencode: {err!r}")
+        return False
+    if not rows and not (root / "opencode.db").exists() and not (root / "storage" / "message").is_dir():
+        return False
+    for mid, created, msg in rows:
+        if created == since and mid in seen:
+            continue
+        local = msg.get("role") == "assistant" and str(msg.get("providerID", "")).lower() in LOCAL_PROVIDER_IDS
+        if local and not (msg.get("time") or {}).get("completed") and now_ms - created < OPENCODE_SETTLE_MS:
+            break  # still streaming; its token counts are not final yet
+        if created != since:
+            since, seen = created, set()
+        seen.add(mid)
+        if not local:
+            continue
+        if msg.get("providerID") == "ollama" and ollama_since and created / 1000 >= ollama_since:
+            continue
+        tokens = msg.get("tokens") or {}
+        tally_add(store, created / 1000, msg.get("modelID"),
+                  tokens.get("input", 0) or 0, (tokens.get("output", 0) or 0) + (tokens.get("reasoning", 0) or 0))
+    state["last_created"], state["ids_at_last"] = since, sorted(seen)
+    return True
+
+
+def local_price(cfg):
+    price = dict(LOCAL_PRICE)
+    custom = cfg.get("price_per_million") if isinstance(cfg, dict) else None
+    if isinstance(custom, dict):
+        for kind in price:
+            value = custom.get(kind)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                price[kind] = float(value)
+    return price
+
+
+def local_summary(store, cfg, now=None):
+    now = now if now is not None else time.time()
+    today = local_day(now)
+    week = {local_day(now - d * 86400) for d in range(7)}
+    totals = {"today": 0, "week": 0, "all_time": 0}
+    tokens_in = tokens_out = 0
+    models = {}
+    for day, rows in store.get("days", {}).items():
+        for model, row in rows.items():
+            n = row.get("in", 0) + row.get("out", 0)
+            tokens_in += row.get("in", 0)
+            tokens_out += row.get("out", 0)
+            totals["all_time"] += n
+            totals["week"] += n if day in week else 0
+            totals["today"] += n if day == today else 0
+            models[model] = models.get(model, 0) + n
+    price = local_price(cfg)
+    top = sorted(models.items(), key=lambda item: (-item[1], item[0]))[:3]
+    return {
+        **totals,
+        "input": tokens_in,
+        "output": tokens_out,
+        "top_models": [{"model": m, "tokens": n} for m, n in top],
+        "est_cost": round(tokens_in / 1e6 * price["input"] + tokens_out / 1e6 * price["output"], 2),
+        "price": price,
+    }
+
+
+def check_milestones(store, all_time, now):
+    """Return the newest milestone crossed since last time, or None. Each fires once.
+    On the very first count, milestones already passed are recorded without firing."""
+    first = "milestones" not in store
+    reached = store.setdefault("milestones", [])
+    new = [m for m in LOCAL_MILESTONES if all_time >= m and m not in reached]
+    reached.extend(new)
+    if first or not new:
+        return None
+    return {"value": max(new), "at": now}
+
+
+def fetch_local(cfg):
+    store = load_json(local_path(), {})
+    if not isinstance(store, dict):
+        store = {}
+    found = []
+    log_path = Path(cfg.get("ollama_log") or ollama_log_path()).expanduser()
+    if sys.platform.startswith("linux") and read_ollama_journal(store):
+        found.append("ollama")
+    elif log_path.exists() and read_ollama_log(store, log_path):
+        found.append("ollama")
+    if read_opencode(store, Path(cfg.get("opencode_dir") or opencode_dir()).expanduser()):
+        found.append("opencode")
+    now = time.time()
+    tally = local_summary(store, cfg, now)
+    tally["sources"] = found
+    milestone = check_milestones(store, tally["all_time"], now)
+    write_json(local_path(), store)
+    result = {"tally": tally}
+    if milestone:
+        result["milestone"] = milestone
+    return result
+
+
 PROVIDERS = [
     ("claude", "Claude", fetch_claude),
     ("codex", "ChatGPT / Codex", fetch_codex),
     ("zai", "z.ai", fetch_zai),
     ("openrouter", "OpenRouter", fetch_openrouter),
+    ("local", "Local AI", fetch_local),
 ]
 PROVIDER_IDS = {provider[0] for provider in PROVIDERS}
 KEY_PROVIDERS = {"zai", "openrouter"}
+DEFAULT_ON = {"local"}  # reads local files only, so it needs no setup
 TRAY_HOVER_PERCENTAGE_MODES = {"hourly", "weekly", "both"}
 WINDOWS_THEME_MODES = {"light", "system", "dark", "night", "custom"}
 WINDOWS_THEME_COLOR_ROLES = {
@@ -746,7 +1058,7 @@ def snapshot(cfg, cache, cached_only=False, force=False):
     now = time.time()
     out = []
     for pid, name, fetch in PROVIDERS:
-        pcfg = cfg.get(pid)
+        pcfg = cfg.get(pid, {} if pid in DEFAULT_ON else None)
         if not isinstance(pcfg, dict) or not pcfg.get("enabled", True):
             continue
         prev = previous.get(pid)
@@ -762,7 +1074,7 @@ def snapshot(cfg, cache, cached_only=False, force=False):
         except Exception as err:  # noqa: BLE001 - every failure becomes a readable message
             log(f"{pid}: {err!r}")
             msg = friendly(err, pid)
-            if prev and (prev.get("windows") or prev.get("balance")):
+            if prev and (prev.get("windows") or prev.get("balance") or prev.get("tally")):
                 result = {**prev, "ok": True, "stale": True, "error": msg}
             else:
                 result = {"id": pid, "name": name, "ok": False, "error": msg}
@@ -774,10 +1086,13 @@ def snapshot(cfg, cache, cached_only=False, force=False):
     for provider in out:
         # A service belongs in the usage view once it has produced usable data.
         # Cached data keeps it connected during temporary refresh failures.
-        provider["connected"] = bool(provider.get("windows") or provider.get("balance"))
+        provider["connected"] = bool(provider.get("windows") or provider.get("balance")
+                                     or (provider.get("tally") or {}).get("all_time"))
         # Front ends show these so people know whether Refresh would change anything yet.
         provider["refresh_at"] = next_refresh_at(provider)
         provider["force_refresh_at"] = next_refresh_at(provider, force=True)
+        if provider.get("fetched_at") != now:
+            provider.pop("milestone", None)  # only the fetch that crossed it announces it
         for w in provider.get("windows", []):
             annotate_pace(w, provider.get("fetched_at"))
     return {"version": VERSION, "updated": now, "providers": out}
@@ -832,11 +1147,30 @@ def human(secs):
     return f"{d}d {h}h" if d else f"{h}h {m}m" if h else f"{max(m, 1)}m"
 
 
+def compact(n):
+    """1234 -> 1.2K, 133000 -> 133K, 1200000 -> 1.2M."""
+    n = int(n or 0)
+    for size, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if n >= size:
+            value = n / size
+            text = f"{value:.1f}" if value < 10 else f"{value:.0f}"
+            return text.removesuffix(".0") + suffix
+    return str(n)
+
+
 def print_text(data):
     now = time.time()
     for p in data["providers"]:
+        if p["id"] == "local" and not p.get("connected"):
+            continue  # shows up once some local usage has been found
         head = p["name"] + (f"  ({p['plan']})" if p.get("plan") else "")
         print(head)
+        t = p.get("tally")
+        if t:
+            print(f"  Today {compact(t['today'])}   Week {compact(t['week'])}   All time {compact(t['all_time'])}")
+            if t.get("top_models"):
+                print("  Top: " + ", ".join(f"{m['model']} {compact(m['tokens'])}" for m in t["top_models"]))
+            print(f"  Worth about ${t['est_cost']:.2f} at API prices (estimate)")
         for w in p.get("windows", []):
             reset = f"resets in {human(w['resets_at'] - now)}" if w.get("resets_at") else ""
             if w.get("runs_out_at"):
@@ -880,7 +1214,7 @@ def main(argv):
         result = snapshot(cfg, cache, cached_only=cache_only, force="--force" in argv)
         if config_error:
             for provider in result["providers"]:
-                if provider["id"] not in ("claude", "codex") and not provider.get("windows") \
+                if provider["id"] not in ("claude", "codex", "local") and not provider.get("windows") \
                         and not provider.get("balance"):
                     provider["error"] = config_error
         result["update_check"] = check_update(cfg, cache, cached_only=cache_only,

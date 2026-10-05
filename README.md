@@ -6,6 +6,8 @@ Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you hav
 
 The compact display reads like `C 58%   G 71%   Z 82%   $14`, where `C` is Claude, `G` is ChatGPT/Codex, and `Z` is z.ai. Cinnamon and macOS show the tighter of each service's 5-hour and weekly windows, so the number answers "how much can I use right now." The display turns amber under 30% and red under 10%. Click it for the full breakdown. When a gauge first turns red you get a desktop notification, and another when it's back above 10%. Nothing repeats while it sits in the red. This works on all three platforms; see [Notifications](#notifications).
 
+If you run models on your own computer, Needle also counts those tokens: `L 133K↑`, always in green. It counts up as a reward rather than down as a limit; see [Local AI](#local-ai).
+
 ## Install on Linux Mint
 
 ```bash
@@ -26,6 +28,32 @@ New installations start empty. Open Needle and choose **Add more**, then select 
 
 Use **Settings** to change a key or remove a service. Removing a keyed service can retain its key for an easier reconnect or delete it. Advanced users can still edit `config.json` directly under `~/.config/needle` on Linux and macOS or `%APPDATA%\Needle` on Windows.
 
+## Local AI
+
+Needle counts the tokens you run on local models and shows the running total next to your limits, like `L 133K↑`. The popup shows today, this week, all time, your top three models, and what those tokens would have cost on a hosted API. It needs no setup: it appears once Needle has found some local usage.
+
+Where the numbers come from (all read-only, nothing leaves your computer):
+
+- **Ollama's server log.** On Linux that is the systemd journal (`journalctl -u ollama`); your user needs to be able to read it, which members of the `adm` or `systemd-journal` group can. On macOS it is `~/.ollama/logs/server.log`, and on Windows `%LOCALAPPDATA%\Ollama\server.log`. Ollama logs the prompt and generated token counts of each chat or generate request, whatever app sent it.
+- **OpenCode.** Assistant messages sent to a local provider (`ollama`, `lmstudio`, `llamacpp`, `vllm`) in `~/.local/share/opencode`. OpenCode messages to Ollama are only counted from before Ollama's log had token counts, so nothing is counted twice.
+
+What is not counted:
+
+- Embeddings (`/api/embed`). Ollama doesn't log their token counts.
+- Requests that Ollama serves without logging token counts, which includes some models on its own engine.
+- Anything from before the log began recording counts, or older than your journal or log keeps. On Linux the first refresh reads the whole journal once, which can take up to a minute. After that each refresh only reads what's new.
+- LM Studio, llama.cpp and vLLM on their own; they are counted only through OpenCode.
+
+Prompt tokens Ollama reuses from its cache aren't counted again, because only newly processed tokens are logged.
+
+**Worth about $X at API prices** is an estimate of what the same tokens would cost on a hosted model. The default is $1 per million input tokens and $5 per million output tokens, about a small hosted model. Change it in `config.json`:
+
+```json
+"local": { "price_per_million": { "input": 3.00, "output": 15.00 } }
+```
+
+You get one notification each time your all-time total passes 100K, 1M, 10M and 100M tokens. Each one fires once, using the same on/off setting as the limit notifications. Usage already found the first time Needle looks doesn't trigger one. To turn Local AI off, set `"local": { "enabled": false }`. The running total lives in `local.json` next to Needle's cache.
+
 ## Reading the gauges
 
 The colored fill is what's left. The thin tick is how much time is left in that window. If the fill sits left of the tick, you're using it up faster than it resets.
@@ -34,7 +62,7 @@ When you are using a window faster than it resets, Needle estimates when it will
 
 ## Notifications
 
-Needle sends one notification when a service first drops to 10% or less, and one more when it's back above 10% (usually because the window reset). It stays quiet in between.
+Needle sends one notification when a service first drops to 10% or less, and one more when it's back above 10% (usually because the window reset). It stays quiet in between. The same setting covers the [Local AI](#local-ai) milestones.
 
 - **Linux**: a desktop notification. Turn it off with **Notify when a gauge turns red** in the applet's settings.
 - **macOS**: a Notification Center banner. Turn it off with **Settings** > **Notify when a limit runs low**. Banners come from Script Editor, because SwiftBar runs `osascript` to send them, so allow notifications for Script Editor in **System Settings** > **Notifications** if none show up.

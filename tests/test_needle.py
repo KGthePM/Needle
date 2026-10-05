@@ -6,6 +6,7 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -871,7 +872,7 @@ Get-Summary $longData
                 json.dumps(
                     {
                         name: {"enabled": False}
-                        for name in ("claude", "codex", "zai", "openrouter")
+                        for name in ("claude", "codex", "zai", "openrouter", "local")
                     }
                 ),
                 encoding="utf-8",
@@ -899,6 +900,303 @@ Get-Summary $longData
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(json.loads(cache.read_text(encoding="utf-8"))["providers"], [])
+
+
+def journal_line(ts, text):
+    return f"{ts} host ollama[1]: {text}"
+
+
+def prompt_line(ts, n):
+    return journal_line(ts, f"slot print_timing: id  0 | task 0 | prompt eval time =     100.00 ms / {n:>6} tokens (   1.00 ms per token,    10.00 tokens per second)")
+
+
+def gen_line(ts, n):
+    return journal_line(ts, f"slot print_timing: id  0 | task 0 |        eval time =     200.00 ms / {n:>6} tokens (   2.00 ms per token,     5.00 tokens per second)")
+
+
+def model_line(ts, model):
+    return journal_line(ts, f'time={ts} level=INFO source=images.go:395 msg="template selection" model=registry.ollama.ai/library/{model} selected=renderer_parser')
+
+
+class FakeJournal:
+    """Stands in for journalctl: hands out entries after the cursor it is given."""
+
+    def __init__(self, entries):
+        self.entries = list(entries)
+        self.calls = []
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append(cmd)
+        after = next((int(a.split("=", 1)[1][1:]) for a in cmd if a.startswith("--after-cursor=")), -1)
+        new = [(i, line) for i, line in enumerate(self.entries) if i > after]
+        if not new:
+            return subprocess.CompletedProcess(cmd, 1, "-- No entries --\n", "")
+        out = "\n".join(line for _, line in new) + f"\n-- cursor: c{new[-1][0]}\n"
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+
+
+def make_opencode_db(root):
+    root.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(root / "opencode.db")
+    conn.execute(
+        "CREATE TABLE message (id text PRIMARY KEY, session_id text NOT NULL, "
+        "time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+
+def add_opencode_message(root, mid, created, provider, model, tokens_in, tokens_out, completed=True, reasoning=0):
+    data = {
+        "id": mid, "role": "assistant", "providerID": provider, "modelID": model,
+        "time": {"created": created, **({"completed": created + 1000} if completed else {})},
+        "tokens": {"input": tokens_in, "output": tokens_out, "reasoning": reasoning, "cache": {"read": 99999, "write": 0}},
+    }
+    conn = sqlite3.connect(root / "opencode.db")
+    conn.execute("INSERT INTO message VALUES (?, 's', ?, ?, ?)", (mid, created, created, json.dumps(data)))
+    conn.commit()
+    conn.close()
+
+
+class LocalAITests(unittest.TestCase):
+    def setUp(self):
+        self._temp = tempfile.TemporaryDirectory()
+        self.temp = Path(self._temp.name)
+        patcher = mock.patch.object(needle, "CACHE_PATH", self.temp / "cache" / "usage.json")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self._temp.cleanup)
+        self.opencode = self.temp / "opencode"
+        self.log = self.temp / "server.log"
+        self.cfg = {"opencode_dir": str(self.opencode), "ollama_log": str(self.log)}
+
+    def fetch(self, journal=None, cfg=None):
+        """One fetch_local, with journalctl replaced (or missing) and Linux assumed."""
+        run = journal if journal is not None else mock.Mock(side_effect=FileNotFoundError("journalctl"))
+        with mock.patch.object(needle.subprocess, "run", run), mock.patch.object(needle.sys, "platform", "linux"):
+            return needle.fetch_local(cfg if cfg is not None else self.cfg)
+
+    def store(self):
+        return json.loads(needle.local_path().read_text())
+
+    def test_journal_totals_add_up_across_fetches_without_double_counting(self):
+        journal = FakeJournal([
+            model_line("2026-10-04T10:00:00-04:00", "gemma4:e4b"),
+            prompt_line("2026-10-04T10:00:01-04:00", 1000),
+            gen_line("2026-10-04T10:00:02-04:00", 200),
+        ])
+        first = self.fetch(journal)["tally"]
+        self.assertEqual((first["all_time"], first["input"], first["output"]), (1200, 1000, 200))
+        self.assertEqual(first["sources"], ["ollama"])
+
+        again = self.fetch(journal)["tally"]
+        self.assertEqual(again["all_time"], 1200)
+        self.assertIn("--after-cursor=c2", journal.calls[-1])
+
+        # A request read in a later fetch still belongs to the model loaded earlier.
+        journal.entries += [prompt_line("2026-10-04T11:00:00-04:00", 50), gen_line("2026-10-04T11:00:01-04:00", 7)]
+        later = self.fetch(journal)["tally"]
+        self.assertEqual(later["all_time"], 1257)
+        self.assertEqual(later["top_models"], [{"model": "gemma4:e4b", "tokens": 1257}])
+        self.assertEqual(self.store()["days"]["2026-10-04"]["gemma4:e4b"], {"in": 1050, "out": 207})
+
+    def test_requests_are_split_by_model(self):
+        journal = FakeJournal([
+            model_line("2026-10-04T10:00:00-04:00", "gemma4:e4b"),
+            prompt_line("2026-10-04T10:00:01-04:00", 100),
+            model_line("2026-10-04T10:05:00-04:00", "qwen3.5:9b"),
+            prompt_line("2026-10-04T10:05:01-04:00", 300),
+            gen_line("2026-10-04T10:05:02-04:00", 30),
+        ])
+        tally = self.fetch(journal)["tally"]
+        self.assertEqual(tally["top_models"], [{"model": "qwen3.5:9b", "tokens": 330}, {"model": "gemma4:e4b", "tokens": 100}])
+
+    def test_journal_with_nothing_to_count_is_not_rescanned_from_the_start(self):
+        journal = FakeJournal([])
+        self.assertEqual(self.fetch(journal)["tally"]["all_time"], 0)
+        self.fetch(journal)
+        self.assertTrue(any(a.startswith("--since=@") for a in journal.calls[-1]))
+
+    def test_journalctl_failure_keeps_the_running_total(self):
+        journal = FakeJournal([prompt_line("2026-10-04T10:00:01-04:00", 500)])
+        self.fetch(journal)
+        failing = mock.Mock(return_value=subprocess.CompletedProcess([], 2, "", "permission denied"))
+        self.assertEqual(self.fetch(failing)["tally"]["all_time"], 500)
+
+    def test_missing_sources_count_nothing_and_do_not_fail(self):
+        result = self.fetch()
+        self.assertEqual(result["tally"]["all_time"], 0)
+        self.assertEqual(result["tally"]["sources"], [])
+        with mock.patch.object(needle, "PROVIDERS", [("local", "Local AI", lambda cfg: result)]):
+            snap = needle.snapshot({}, {})
+        self.assertFalse(snap["providers"][0]["connected"])
+
+    def test_log_file_is_read_incrementally_and_after_rotation(self):
+        self.log.write_text(
+            'time=2026-10-04T10:00:00.000-04:00 level=INFO msg="template selection" model=registry.ollama.ai/library/llama3:8b\n'
+            "slot print_timing: id  0 | task 0 | prompt eval time =  10.00 ms /    40 tokens\n"
+            "slot print_timing: id  0 | task 0 |        eval time =  10.00 ms /     4 tok"  # still being written
+        )
+        self.assertEqual(self.fetch()["tally"]["all_time"], 40)
+        with self.log.open("a") as handle:
+            handle.write("ens\n[GIN] 2026/10/04 - 10:01:00 | 200 | 1s | 127.0.0.1 | POST \"/api/chat\"\n")
+        tally = self.fetch()["tally"]
+        self.assertEqual((tally["all_time"], tally["top_models"][0]["model"]), (44, "llama3:8b"))
+        self.assertEqual(self.fetch()["tally"]["all_time"], 44)
+
+        # Ollama started a fresh log: read it from the start, keep the old total.
+        self.log.write_text("slot print_timing: id  0 | task 0 | prompt eval time =  10.00 ms /     6 tokens\n")
+        self.assertEqual(self.fetch()["tally"]["all_time"], 50)
+
+    def test_unreadable_log_is_skipped(self):
+        self.log.mkdir()
+        self.assertEqual(self.fetch()["tally"]["all_time"], 0)
+
+    def test_opencode_counts_local_providers_only_and_only_once(self):
+        make_opencode_db(self.opencode)
+        add_opencode_message(self.opencode, "m1", 1_700_000_000_000, "ollama", "qwen2.5:7b", 1000, 100, reasoning=5)
+        add_opencode_message(self.opencode, "m2", 1_700_000_000_000, "zai-coding-plan", "glm-4.7", 9999, 999)
+        tally = self.fetch()["tally"]
+        self.assertEqual(tally["all_time"], 1105)  # cache reads are never counted
+        self.assertEqual(tally["sources"], ["opencode"])
+        self.assertEqual(self.fetch()["tally"]["all_time"], 1105)
+
+        # Same millisecond as the last one read, and a later one.
+        add_opencode_message(self.opencode, "m3", 1_700_000_000_000, "lmstudio", "qwen3-coder", 10, 1)
+        add_opencode_message(self.opencode, "m4", 1_700_000_100_000, "ollama", "qwen2.5:7b", 20, 2)
+        self.assertEqual(self.fetch()["tally"]["all_time"], 1138)
+        self.assertEqual(self.fetch()["tally"]["all_time"], 1138)
+
+    def test_opencode_waits_for_a_message_that_is_still_streaming(self):
+        make_opencode_db(self.opencode)
+        now_ms = int(time.time() * 1000)
+        add_opencode_message(self.opencode, "m1", now_ms - 5000, "ollama", "qwen", 0, 0, completed=False)
+        self.assertEqual(self.fetch()["tally"]["all_time"], 0)
+        conn = sqlite3.connect(self.opencode / "opencode.db")
+        data = json.loads(conn.execute("SELECT data FROM message").fetchone()[0])
+        data["time"]["completed"] = now_ms
+        data["tokens"].update(input=300, output=30)
+        conn.execute("UPDATE message SET data = ?", (json.dumps(data),))
+        conn.commit()
+        conn.close()
+        self.assertEqual(self.fetch()["tally"]["all_time"], 330)
+
+    def test_opencode_ollama_messages_are_left_to_the_ollama_log_once_it_has_counts(self):
+        make_opencode_db(self.opencode)
+        add_opencode_message(self.opencode, "old", 1_700_000_000_000, "ollama", "qwen", 100, 10)
+        add_opencode_message(self.opencode, "new", 1_800_000_000_000, "ollama", "qwen", 5000, 500)
+        add_opencode_message(self.opencode, "lms", 1_800_000_000_000, "lmstudio", "qwen", 7, 3)
+        journal = FakeJournal([prompt_line("2026-06-01T00:00:00+00:00", 1)])  # 1780272000
+        tally = self.fetch(journal)["tally"]
+        self.assertEqual(tally["all_time"], 1 + 110 + 10)
+
+    def test_opencode_json_files_are_read_when_there_is_no_database(self):
+        folder = self.opencode / "storage" / "message" / "ses_1"
+        folder.mkdir(parents=True)
+        message = {"id": "m1", "role": "assistant", "providerID": "ollama", "modelID": "qwen2.5:7b",
+                   "time": {"created": 1_700_000_000_000, "completed": 1_700_000_001_000},
+                   "tokens": {"input": 70, "output": 7, "reasoning": 0, "cache": {"read": 0, "write": 0}}}
+        (folder / "m1.json").write_text(json.dumps(message))
+        before = (folder / "m1.json").read_bytes()
+        self.assertEqual(self.fetch()["tally"]["all_time"], 77)
+        self.assertEqual(self.fetch()["tally"]["all_time"], 77)
+        self.assertEqual((folder / "m1.json").read_bytes(), before)
+
+    def test_broken_opencode_database_is_skipped(self):
+        self.opencode.mkdir()
+        (self.opencode / "opencode.db").write_text("not a database")
+        self.assertEqual(self.fetch()["tally"]["all_time"], 0)
+
+    def test_new_source_appearing_later_is_added(self):
+        journal = FakeJournal([prompt_line("2026-10-04T10:00:01-04:00", 100)])
+        self.assertEqual(self.fetch(journal)["tally"]["all_time"], 100)
+        make_opencode_db(self.opencode)
+        add_opencode_message(self.opencode, "m1", 1_700_000_000_000, "ollama", "qwen", 40, 2)
+        tally = self.fetch(journal)["tally"]
+        self.assertEqual((tally["all_time"], tally["sources"]), (142, ["ollama", "opencode"]))
+
+    def test_milestones_fire_once_and_not_for_usage_found_on_first_run(self):
+        journal = FakeJournal([prompt_line("2026-10-04T10:00:00-04:00", 150_000)])
+        self.assertNotIn("milestone", self.fetch(journal))  # 100K was already passed before Needle looked
+        journal.entries.append(prompt_line("2026-10-04T10:00:01-04:00", 900_000))
+        first = self.fetch(journal)
+        self.assertEqual(first["milestone"]["value"], 1_000_000)
+        self.assertNotIn("milestone", self.fetch(journal))
+        journal.entries.append(prompt_line("2026-10-04T10:00:02-04:00", 1))
+        self.assertNotIn("milestone", self.fetch(journal))
+        self.assertEqual(self.store()["milestones"], [100_000, 1_000_000])
+
+    def test_milestone_is_not_replayed_from_the_cache(self):
+        tally = {"all_time": 1_000_000}
+        fetch = mock.Mock(return_value={"tally": tally, "milestone": {"value": 1_000_000, "at": 1}})
+        with mock.patch.object(needle, "PROVIDERS", [("local", "Local AI", fetch)]):
+            first = needle.snapshot({}, {})
+            self.assertEqual(first["providers"][0]["milestone"]["value"], 1_000_000)
+            self.assertTrue(first["providers"][0]["connected"])
+            again = needle.snapshot({}, first)
+            cached = needle.snapshot({}, first, cached_only=True)
+        fetch.assert_called_once()
+        self.assertNotIn("milestone", again["providers"][0])
+        self.assertNotIn("milestone", cached["providers"][0])
+
+    def test_local_ai_can_be_turned_off(self):
+        fetch = mock.Mock()
+        with mock.patch.object(needle, "PROVIDERS", [("local", "Local AI", fetch)]):
+            self.assertEqual(needle.snapshot({"local": {"enabled": False}}, {})["providers"], [])
+        fetch.assert_not_called()
+
+    def test_price_estimate(self):
+        store = {"days": {"2026-10-04": {"m": {"in": 2_000_000, "out": 500_000}}}}
+        self.assertEqual(needle.local_summary(store, {})["est_cost"], 2 * 1.00 + 0.5 * 5.00)
+        custom = {"price_per_million": {"input": 3, "output": 15}}
+        self.assertEqual(needle.local_summary(store, custom)["est_cost"], 6 + 7.5)
+        partial = {"price_per_million": {"input": -1, "output": "free"}}
+        self.assertEqual(needle.local_summary(store, partial)["price"], needle.LOCAL_PRICE)
+
+    def test_today_week_and_all_time(self):
+        now = time.mktime((2026, 10, 4, 12, 0, 0, 0, 0, -1))
+        store = {"days": {
+            "2026-10-04": {"a": {"in": 1, "out": 0}},
+            "2026-09-30": {"a": {"in": 10, "out": 0}},
+            "2026-09-01": {"b": {"in": 100, "out": 0}},
+        }}
+        s = needle.local_summary(store, {}, now)
+        self.assertEqual((s["today"], s["week"], s["all_time"]), (1, 11, 111))
+
+    def test_compact_numbers(self):
+        cases = {0: "0", 999: "999", 1000: "1K", 1234: "1.2K", 133_000: "133K", 1_200_000: "1.2M", 10_000_000: "10M"}
+        for n, text in cases.items():
+            self.assertEqual(needle.compact(n), text)
+
+    def test_text_output_shows_local_ai_once_found(self):
+        tally = {"today": 2100, "week": 120_000, "all_time": 133_000, "est_cost": 0.2,
+                 "top_models": [{"model": "gemma4:e4b", "tokens": 74_000}]}
+        data = {"providers": [{"id": "local", "name": "Local AI", "connected": True, "tally": tally},
+                              {"id": "local", "name": "Hidden", "connected": False, "tally": {}}]}
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            needle.print_text(data)
+        text = output.getvalue()
+        self.assertIn("Today 2.1K   Week 120K   All time 133K", text)
+        self.assertIn("gemma4:e4b 74K", text)
+        self.assertIn("Worth about $0.20 at API prices (estimate)", text)
+        self.assertNotIn("Hidden", text)
+
+    def test_parallel_fetches_count_each_line_once(self):
+        journal = FakeJournal([prompt_line("2026-10-04T10:00:00-04:00", 10)])
+        results = []
+
+        def worker():
+            with needle.cache_lock(timeout=10):
+                results.append(needle.fetch_local(self.cfg)["tally"]["all_time"])
+
+        with mock.patch.object(needle.subprocess, "run", journal), mock.patch.object(needle.sys, "platform", "linux"):
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(results, [10, 10, 10, 10])
 
 
 if __name__ == "__main__":

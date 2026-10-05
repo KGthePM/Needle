@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.6.0</xbar.version>
+# <xbar.version>v1.7.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
-# <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
+# <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance, plus a count of your local AI tokens.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
@@ -25,6 +25,8 @@ CONFIG = Path(os.environ.get("NEEDLE_CONFIG") or
               Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "needle" / "config.json").expanduser()
 # Which providers have had a "nearly out" notification, so each one fires once per dip.
 ALERTS = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "needle" / "mac-alerts.json"
+# The biggest Local AI milestone already announced, so none is announced twice.
+MILESTONE = ALERTS.with_name("mac-milestone.json")
 PY = sys.executable or "/usr/bin/python3"
 PLUGIN = Path(__file__).resolve()
 # Providers whose key can be pasted from the menu: (name, where to get one, dialog hint).
@@ -51,7 +53,7 @@ SMALL = {"size": "11", "color": "#86868b"}
 # SwiftBar on macOS 26 only renders the basic 8 ANSI colors (24-bit codes come out
 # white), and it ignores sfcolor on symbols, so provider dots are emoji instead.
 INK = {"ok": 32, "warn": 33, "crit": 31, "dim": None}  # green, yellow, red, default text
-DOT = {"claude": "🟠", "codex": "⚫", "zai": "🔵", "openrouter": "🟣"}
+DOT = {"claude": "🟠", "codex": "⚫", "zai": "🔵", "openrouter": "🟣", "local": "🟢"}
 PANEL_TAG = {"claude": "C", "codex": "G", "zai": "Z"}
 PACE_WINDOWS = ("5-hour", "Weekly")
 PACE = {"fast": ("▲ fast", "warn"), "even": ("● on pace", "dim"), "slow": ("▼ plenty", "ok")}
@@ -75,6 +77,17 @@ def item(text, **params):
 
 def sep():
     print("---")
+
+
+def compact(n):
+    """1234 -> 1.2K, 133000 -> 133K, 1200000 -> 1.2M."""
+    n = int(n or 0)
+    for size, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if n >= size:
+            value = n / size
+            text = f"{value:.1f}" if value < 10 else f"{value:.0f}"
+            return (text[:-2] if text.endswith(".0") else text) + suffix
+    return str(n)
 
 
 def level(left):
@@ -204,6 +217,9 @@ def render_title(providers):
             text = f"{PANEL_TAG.get(p['id'], p['name'][0])} {round(left)}%"
             parts.append(paint(text, level(left)) if level(left) != "ok" else text)
             lefts.append(left)
+        elif p.get("tally"):
+            # Local AI counts up, so it is always green and never moves the gauge.
+            parts.append(paint(f"L {compact(p['tally']['all_time'])}↑", "ok"))
         elif p.get("balance") and p["balance"].get("remaining") is not None:
             b = p["balance"]
             text = f"${round(b['remaining'])}"
@@ -245,7 +261,27 @@ def pace_text(w):
     return paint(text, ink), note
 
 
+def render_local(p, width):
+    """Local AI is one line with its total; the breakdown sits in a submenu."""
+    t = p["tally"]
+    item(f"{DOT['local']} {p['name']}  {paint(compact(t['all_time']) + '↑', 'ok')}", size="13", ansi=True, **LIVE)
+    for name, n in (("Today", t["today"]), ("This week", t["week"]), ("All time", t["all_time"])):
+        item(f"--{name:<{width}}{paint(f'{compact(n):>6}', 'ok')} tokens", **MONO)
+    if t.get("top_models"):
+        item("--Top: " + ", ".join(f"{m['model']} {compact(m['tokens'])}" for m in t["top_models"]), **SMALL)
+    item(f"--Worth about ${t['est_cost']:.2f} at API prices (estimate)", **SMALL,
+         tooltip=f"At ${t['price']['input']:g} per million input and ${t['price']['output']:g} per million "
+                 "output tokens. Change price_per_million under local in config.json.")
+    if p.get("error"):
+        item(f"--{p['error']}", sfimage="exclamationmark.triangle", **SMALL)
+    if p.get("fetched_at"):
+        item(f"--{freshness(p)}", **SMALL)
+
+
 def render_provider(p, width):
+    if p.get("tally"):
+        render_local(p, width)
+        return
     head = p["name"] + (f" {p['plan']}" if p.get("plan") else "")
     item(f"{DOT.get(p['id'], '⚪')} {head}", size="13", **LIVE)
 
@@ -434,6 +470,26 @@ def check_alerts(providers, config):
             pass
 
 
+def check_milestone(providers, config):
+    """The fetcher reports a Local AI milestone on the one refresh that crossed it."""
+    m = next((p.get("milestone") for p in providers if p["id"] == "local"), None)
+    if not isinstance(m, dict):
+        return
+    try:
+        announced = int(json.loads(MILESTONE.read_text()))
+    except (OSError, ValueError, TypeError):
+        announced = 0
+    if not m.get("value", 0) > announced:
+        return
+    if notifications_on(config):
+        notify(f"{compact(m['value'])} tokens run locally 🎉")
+    try:
+        MILESTONE.parent.mkdir(parents=True, exist_ok=True)
+        MILESTONE.write_text(json.dumps(m["value"]))
+    except OSError:
+        pass
+
+
 # ------------------------------------------------------------------ key dialog
 
 def osascript(script):
@@ -530,19 +586,23 @@ def main():
     data, fatal = load()
     raw_providers = (data or {}).get("providers", [])
     provider_map = {p.get("id"): p for p in raw_providers if isinstance(p, dict) and p.get("id")}
+    # Local AI needs no setup: it shows once the fetcher has found some local usage.
     providers = [p for p in raw_providers
-                 if isinstance(p, dict) and p.get("id") in enabled and provider_connected(p)]
-    connected = {p["id"] for p in providers}
+                 if isinstance(p, dict) and (p.get("id") in enabled or p.get("id") == "local")
+                 and provider_connected(p)]
+    connected = {p["id"] for p in providers if p["id"] != "local"}
     render_title(providers)
     sep()
     if data:
         check_alerts(providers, config)
+        check_milestone(providers, config)
 
     if providers:
         if fatal:
             item(fatal, **SMALL)
         labels = [w["label"] for p in providers for w in p.get("windows", [])]
         labels += [p["balance"].get("label", "Credits") for p in providers if p.get("balance")]
+        labels += ["This week" for p in providers if p.get("tally")]
         width = max(map(len, labels), default=8) + 2
         for i, p in enumerate(providers):
             if i:

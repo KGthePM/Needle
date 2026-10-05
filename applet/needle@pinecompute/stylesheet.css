@@ -19,6 +19,10 @@
 .aiu-dot-codex      { background-color: #10a37f; }
 .aiu-dot-zai        { background-color: #4f7cff; }
 .aiu-dot-openrouter { background-color: #8b7cf6; }
+.aiu-dot-local      { background-color: #34c58a; }
+.aiu-good           { color: #34c58a; }
+.aiu-collapse { border-radius: 5px; }
+.aiu-collapse:hover, .aiu-collapse:focus { background-color: rgba(128, 128, 128, 0.12); }
 
 .aiu-window { padding-top: 6px; spacing: 5px; }
 .aiu-row { spacing: 8px; }

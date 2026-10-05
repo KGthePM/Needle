@@ -114,6 +114,14 @@
     "type": "switch",
     "default": true,
     "description": "Notify when a gauge turns red",
-    "tooltip": "One desktop notification the first time a provider drops to 10% or less, and one more when it's back above 10%."
+    "tooltip": "One desktop notification the first time a provider drops to 10% or less, and one more when it's back above 10%. Also one when your Local AI total passes 100K, 1M, 10M or 100M tokens."
+  },
+  "milestone-announced": {
+    "type": "generic",
+    "default": 0
+  },
+  "local-collapsed": {
+    "type": "generic",
+    "default": false
   }
 }
