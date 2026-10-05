@@ -467,7 +467,6 @@ class ProviderTests(unittest.TestCase):
         })
 
 
-@unittest.skipUnless(os.name == "nt" and WINDOWS_POWERSHELLS, "PowerShell tray smoke test requires Windows")
 class UpdateTests(unittest.TestCase):
     RELEASE = {"latest": "99.0.0", "url": "https://example.test/r", "notes": "New", "zipball": "z"}
 
@@ -504,10 +503,20 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(needle.check_update({}, {}, cached_only=True), {})
             latest.assert_not_called()
 
+    def test_manual_check_ignores_daily_limit_and_setting(self):
+        fresh = {"checked_at": 1000, "latest": "1.0.0"}
+        with mock.patch.object(needle, "latest_release", return_value=self.RELEASE) as latest, \
+                mock.patch.object(needle.time, "time", return_value=1000 + 60):
+            result = needle.check_update({"check_updates": False}, {"update_check": fresh}, now=True)
+            self.assertEqual(result["latest"], "99.0.0")
+            self.assertEqual(result["checked_at"], 1060)
+            self.assertEqual(needle.check_update({}, {}, cached_only=True, now=True), {})
+            latest.assert_called_once()
+
     def test_check_update_failure_is_quiet_and_waits_a_day(self):
         with mock.patch.object(needle, "latest_release", side_effect=OSError("offline")), \
-                mock.patch.object(needle.time, "time", return_value=5000):
-            self.assertEqual(needle.check_update({}, {}), {"checked_at": 5000})
+                mock.patch.object(needle.time, "time", return_value=needle.UPDATE_EVERY + 5000):
+            self.assertEqual(needle.check_update({}, {}), {"checked_at": needle.UPDATE_EVERY + 5000})
 
     def test_refresh_reports_update_and_saves_check(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -525,6 +534,7 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(json.loads(cache.read_text(encoding="utf-8"))["update_check"]["latest"], "99.0.0")
 
 
+@unittest.skipUnless(os.name == "nt" and WINDOWS_POWERSHELLS, "PowerShell tray smoke test requires Windows")
 class WindowsTrayTests(unittest.TestCase):
     def test_deferred_render_does_not_dispose_active_combobox(self):
         script = r'''

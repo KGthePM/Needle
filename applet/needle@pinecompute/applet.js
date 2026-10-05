@@ -93,6 +93,16 @@ function freshness(p) {
     return parts.join(" · ");
 }
 
+// What the last release check found, for the Check for updates row.
+function updateStatus(data) {
+    if (!data) return "";
+    if (data.update) return `${data.update.latest} available`;
+    const check = data.update_check || {};
+    if (!check.checked_at) return "";
+    if (!check.latest) return "Couldn't reach GitHub";
+    return `Up to date, checked ${ago(check.checked_at)}`;
+}
+
 const money = (n) => `$${Number(n).toFixed(2)}`;
 
 function uiScale() {
@@ -208,6 +218,20 @@ class AIUsageApplet extends Applet.TextIconApplet {
         const key = force ? "force_refresh_at" : "refresh_at";
         if (providers.some((p) => !p[key])) return 0;
         return Math.max(0, Math.min(...providers.map((p) => p[key])) - now());
+    }
+
+    // Asks GitHub now instead of waiting for the daily check. The fetcher refreshes usage
+    // in the same run, with the normal cooldowns.
+    _checkUpdates() {
+        if (this._busy) return;
+        this._busy = true;
+        this._checking = true;
+        this._setBusy(true);
+        this._run(["--check-updates"], () => {
+            this._busy = false;
+            this._checking = false;
+            this._setBusy(false);
+        });
     }
 
     _refresh(force) {
@@ -426,6 +450,10 @@ class AIUsageApplet extends Applet.TextIconApplet {
             btn.reactive = !busy && wait <= 0;
             btn._nameLabel.opacity = btn.reactive ? 255 : 150;
         });
+        if (this._checkUpdatesBtn) {
+            this._checkUpdatesBtn._valueLabel.text = this._checking ? "Checking…" : updateStatus(this._data);
+            this._checkUpdatesBtn.reactive = !busy;
+        }
     }
 
     // -------------------------------------------------------------- drawing
@@ -509,6 +537,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._content.get_children().forEach((child) => child.destroy());
         this._refreshBtn = null;
         this._forceRefreshBtn = null;
+        this._checkUpdatesBtn = null;
         this._tickers = [];
         if (this._view === "add") this._renderAddView();
         else if (this._view === "settings") this._renderSettingsView();
@@ -664,6 +693,14 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._content.add(label("UTILITIES", "aiu-section-label", true));
         this._refreshBtn = this._settingRow("Refresh", "", () => this._refresh(false));
         this._forceRefreshBtn = this._settingRow("Refresh (skip cooldowns)", "", () => this._refresh(true));
+        this._checkUpdatesBtn = this._settingRow("Check for updates", "", () => {
+            if (this._data && this._data.update) {
+                this.menu.close();
+                this._inTerminal("--update");
+            } else {
+                this._checkUpdates();
+            }
+        });
         this._settingRow("Open raw configuration", "", () => { this.menu.close(); this._openConfig(); });
         this._settingRow("Debug in terminal", "", () => { this.menu.close(); this._openDebug(); });
         this._setBusy(this._busy);

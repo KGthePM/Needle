@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.4.0</xbar.version>
+# <xbar.version>v1.5.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -98,6 +98,18 @@ def freshness(p):
     if p.get("refresh_at", 0) > time.time():
         text += f" · next refresh at {clock(p['refresh_at'])}"
     return text
+
+
+def update_status(data):
+    """What the last check found when no update is waiting, shown under Check for updates."""
+    if not data:
+        return ""
+    check = data.get("update_check") or {}
+    if not check.get("checked_at"):
+        return ""
+    if not check.get("latest"):
+        return "Couldn't reach GitHub"
+    return f"Up to date, checked {clock(check['checked_at'])}"
 
 
 def refresh_ready_at(providers, key):
@@ -350,6 +362,15 @@ def render_settings(data, enabled, stored_keys):
     render_refresh("Refresh", refresh_ready_at(providers, "refresh_at"), refresh=True, sfimage="arrow.clockwise")
     render_refresh("Refresh now (skip cooldowns)", refresh_ready_at(providers, "force_refresh_at"),
                    **force_refresh_action())
+    if data and data.get("update"):
+        item(f"--Update to {data['update']['latest']}…", bash=PY, param1=str(FETCHER), param2="--update",
+             terminal=True)
+    else:
+        item("--Check for updates", bash=PY, param1=str(FETCHER), param2="--check-updates",
+             terminal=False, refresh=True)
+        status = update_status(data)
+        if status:
+            item(f"--{status}", **SMALL)
     item("--Open raw config", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
     item("--Debug in Terminal", bash=PY, param1=str(FETCHER), param2="--text", param3="--debug",
          param4="--force", terminal=True)

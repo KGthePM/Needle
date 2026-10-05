@@ -60,7 +60,9 @@ On Windows, choose **Settings** > **Debug in terminal** from the tray flyout.
 
 Once a day Needle checks GitHub for a new release. When there is one, an **Update to 1.x.x…** item shows up at the top of the menu on the Mac, and an **Update** button appears in the popup on Linux and Windows. Clicking it opens a terminal window that downloads the release and reruns the installer. Your keys and settings stay as they are, and it doesn't ask the setup questions again. From a terminal, `needle --update` does the same thing.
 
-To turn off the check, add `"check_updates": false` at the top level of `config.json`.
+To check right away instead of waiting for the daily check, choose **Settings** > **Check for updates**. It shows whether you're up to date and when it last checked. From a terminal, `needle --check-updates` does the same.
+
+To turn off the daily check, add `"check_updates": false` at the top level of `config.json`. **Check for updates** still works when you choose it.
 
 ## If something looks off
 

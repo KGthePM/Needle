@@ -366,6 +366,17 @@ function Update-FlyoutClock {
     }
 }
 
+# What the last release check found when no update is waiting, shown under Check for updates.
+function Format-UpdateStatus {
+    $check = if ($script:Data) { Get-Value $script:Data 'update_check' } else { $null }
+    $checkedAt = [double](Get-Value $check 'checked_at' 0)
+    if ($checkedAt -le 0) { return '' }
+    if (-not (Get-Value $check 'latest')) { return 'Could not reach GitHub' }
+    $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $checkedAt
+    $when = if ($age -lt 60) { 'just now' } else { '{0} ago' -f (Format-Duration $age) }
+    return 'Up to date, checked {0}' -f $when
+}
+
 function Get-Pace {
     param($Window, [double]$Left)
     $length = [double](Get-Value $Window 'window_seconds' 0)
@@ -510,6 +521,7 @@ $script:PowerShellPath = (Get-Process -Id $PID).Path
 $script:Data = $null
 $script:LastError = $null
 $script:RefreshProcess = $null
+$script:CheckingUpdates = $false
 $script:FreshnessLabels = @()
 $script:RefreshButtons = @()
 $script:RefreshOutput = $null
@@ -1434,6 +1446,29 @@ function Render-SettingsView {
     $script:RefreshButtons += @{ Button = $force; Text = 'Refresh skipping cooldowns'; SkipCooldowns = $true }
     $script:Content.Controls.Add($force)
     $script:RenderY += 40
+    $update = if ($script:Data) { Get-Value $script:Data 'update' } else { $null }
+    if ($update) {
+        $check = New-FlyoutButton ('Update to {0}...' -f (Get-Value $update 'latest' '')) 16 $script:RenderY 388 34 {
+            Hide-Flyout
+            Start-UpdateWindow
+        } -Primary
+        $script:Content.Controls.Add($check)
+        $script:RenderY += 40
+    }
+    else {
+        $checkText = if ($script:CheckingUpdates) { 'Checking for updates...' } else { 'Check for updates' }
+        $check = New-FlyoutButton $checkText 16 $script:RenderY 388 34 {
+            Start-Refresh $false $true
+            Request-FlyoutRender
+        }
+        $check.Enabled = $null -eq $script:RefreshProcess
+        $script:Content.Controls.Add($check)
+        $script:RenderY += 40
+        $status = Format-UpdateStatus
+        if ($status -and -not $script:CheckingUpdates) {
+            [void](Add-FlyoutText $status 20 384 $script:UiFont (Get-ThemeColor 'muted') Left 8)
+        }
+    }
     $raw = New-FlyoutButton 'Open raw config' 16 $script:RenderY 388 34 { Open-Config }
     $script:Content.Controls.Add($raw)
     $script:RenderY += 40
@@ -1599,10 +1634,12 @@ function Update-Tray {
 }
 
 function Start-Refresh {
-    param([bool]$SkipCooldowns)
+    param([bool]$SkipCooldowns, [bool]$CheckUpdates = $false)
     if ($script:RefreshProcess -and -not $script:RefreshProcess.HasExited) { return }
     $arguments = @($script:Python.Prefix) + @($script:Fetcher)
     if ($SkipCooldowns) { $arguments += '--force' }
+    if ($CheckUpdates) { $arguments += '--check-updates' }
+    $script:CheckingUpdates = $CheckUpdates
     $info = [Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $script:Python.File
     $info.Arguments = (($arguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join ' ')
@@ -1635,6 +1672,7 @@ $script:PollTimer.Add_Tick({
     $script:RefreshProcess = $null
     $script:RefreshOutput = $null
     $script:RefreshError = $null
+    $script:CheckingUpdates = $false
     try {
         $stdout = $output.GetAwaiter().GetResult()
         $stderr = $errorOutput.GetAwaiter().GetResult()

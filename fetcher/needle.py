@@ -8,6 +8,7 @@ needle: one JSON snapshot of your Claude, ChatGPT/Codex, z.ai and OpenRouter lim
   needle --force    skip cooldowns for z.ai / OpenRouter (Claude and Codex keep a floor)
   needle --debug    also dump raw API responses to stderr
   needle --update   download the latest release and rerun the installer
+  needle --check-updates  look for a new release now instead of waiting for the daily check
 
 Standard library only. Works on Linux, macOS and Windows.
 """
@@ -30,7 +31,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 TIMEOUT = 10
 
 
@@ -607,10 +608,15 @@ def latest_release():
     }
 
 
-def check_update(cfg, cache, cached_only=False):
-    """Last known release, refreshed at most once a day. Failures are quiet: try again tomorrow."""
+def check_update(cfg, cache, cached_only=False, now=False):
+    """Last known release, refreshed at most once a day. Failures are quiet: try again tomorrow.
+
+    `now` is someone pressing Check for updates, so it ignores the daily limit and the
+    check_updates setting, which only turns off the automatic check.
+    """
     info = cache.get("update_check") or {}
-    if cfg.get("check_updates", True) and not cached_only and time.time() - info.get("checked_at", 0) > UPDATE_EVERY:
+    due = cfg.get("check_updates", True) and time.time() - info.get("checked_at", 0) > UPDATE_EVERY
+    if not cached_only and (now or due):
         info = {"checked_at": time.time()}
         try:
             info.update(latest_release())
@@ -825,7 +831,8 @@ def main(argv):
                 if provider["id"] not in ("claude", "codex") and not provider.get("windows") \
                         and not provider.get("balance"):
                     provider["error"] = config_error
-        result["update_check"] = check_update(cfg, cache, cached_only=cache_only)
+        result["update_check"] = check_update(cfg, cache, cached_only=cache_only,
+                                              now="--check-updates" in argv)
         update = update_available(result["update_check"])
         if update:
             result["update"] = update
