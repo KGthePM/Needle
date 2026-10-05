@@ -109,5 +109,11 @@
     "type": "colorchooser",
     "default": "#9b8cff",
     "description": "OpenRouter"
+  },
+  "notify": {
+    "type": "switch",
+    "default": true,
+    "description": "Notify when a gauge turns red",
+    "tooltip": "One desktop notification the first time a provider drops to 10% or less. Stays quiet until it recovers."
   }
 }

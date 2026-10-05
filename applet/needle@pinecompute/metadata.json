@@ -2,7 +2,7 @@
   "uuid": "needle@pinecompute",
   "name": "Needle",
   "description": "Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "max-instances": 1,
   "author": "KGthePM"
 }

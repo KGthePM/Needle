@@ -118,6 +118,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._view = "usage";
         this._dialog = null;
         this._instanceId = instanceId;
+        this._alerted = {}; // provider id -> true while it sits at 10% or less
 
         this.set_applet_icon_symbolic_path(`${metadata.path}/icons/gauge-symbolic.svg`);
         this.set_applet_tooltip("Needle");
@@ -131,6 +132,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         CUSTOM_COLORS.forEach((setting) => {
             this.settings.bind(setting[0], setting[1], () => this._themeChanged());
         });
+        this.settings.bind("notify", "notifyAlerts", () => {});
 
         this.menuManager = new PopupMenu.PopupMenuManager(this);
         this.menu = new Applet.AppletPopupMenu(this, orientation);
@@ -434,6 +436,30 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this.set_applet_label(this.panelStyle === "icon" ? "" : parts.join("   "));
         if (this._applet_label) this._applet_label.set_style(LEVEL_COLOR[worst] ? `color: ${LEVEL_COLOR[worst]};` : null);
         this.set_applet_tooltip(tips.length ? tips.join("\n\n") : this._fatal || "Needle");
+        this._checkAlerts(providers);
+    }
+
+    // One desktop notification per provider the first time it drops to crit,
+    // and only after it has climbed back out. No spam while it sits there.
+    _checkAlerts(providers) {
+        if (!this.notifyAlerts) return;
+        const crit = {};
+        for (const p of providers) {
+            if (!p.windows) continue;
+            const left = bindingLeft(p);
+            if (left !== null && left <= 10) crit[p.id] = Math.round(left);
+        }
+        for (const id of Object.keys(crit)) {
+            if (this._alerted[id]) continue;
+            this._alerted[id] = true;
+            const name = (providers.find((p) => p.id === id) || {}).name || id;
+            const cmd = ["notify-send", "-u", "critical", "Needle",
+                `${name} is nearly out: ${crit[id]}% left`];
+            try { Util.spawn(cmd); } catch (e) { global.logError(`${UUID}: ${e}`); }
+        }
+        for (const id of Object.keys(this._alerted)) {
+            if (!crit[id]) delete this._alerted[id];
+        }
     }
 
     _renderMenu() {
