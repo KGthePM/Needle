@@ -466,11 +466,8 @@ function Get-Summary {
     foreach ($provider in @(Get-Value $Data 'providers' @())) {
         $providerId = [string](Get-Value $provider 'id' '')
         if (-not (Test-ProviderShown $provider $enabledIds)) { continue }
-        $tally = Get-Value $provider 'tally'
-        if ($tally) {
-            $parts += 'L ' + (Format-Compact (Get-Value $tally 'all_time' 0)) + [char]0x2191
-            continue
-        }
+        # Local AI isn't a limit, so it stays out of the hover text; it has its own card.
+        if (Get-Value $provider 'tally') { continue }
         $tag = if ($tags.ContainsKey($providerId)) { $tags[$providerId] } else { ([string](Get-Value $provider 'name' '?')).Substring(0, 1) }
         $windowLabels = switch ($mode) {
             'hourly' { @('5-hour') }

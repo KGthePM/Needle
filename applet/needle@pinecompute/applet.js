@@ -67,7 +67,6 @@ function level(left) {
 }
 
 const LEVEL_COLOR = { warn: "#e9a93a", crit: "#ea5f5f" };
-const LOCAL_COLOR = "#34c58a"; // Local AI counts up, so it always wears the "good" color
 
 // 1234 -> 1.2K, 133000 -> 133K, 1200000 -> 1.2M
 function compact(n) {
@@ -501,7 +500,6 @@ class AIUsageApplet extends Applet.TextIconApplet {
 
     _renderPanel() {
         const providers = this._shownProviders();
-        let localPart = null;
         const parts = [];
         const tips = [];
         let worst = "ok";
@@ -511,8 +509,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
 
         for (const p of providers) {
             if (p.tally) {
+                // Local AI isn't a limit, so it stays out of the panel label; it has its own card.
                 const t = p.tally;
-                localPart = `L ${compact(t.all_time)}↑`;
                 tips.push(`${p.name}\n  Today ${compact(t.today)}, this week ${compact(t.week)}, all time ${compact(t.all_time)}\n  Worth about ${money(t.est_cost)} at API prices (estimate)`);
             } else if (p.windows && p.windows.length) {
                 const left = bindingLeft(p);
@@ -541,16 +539,9 @@ class AIUsageApplet extends Applet.TextIconApplet {
             }
         }
 
-        const shown = localPart ? parts.concat([localPart]) : parts;
-        this.set_applet_label(this.panelStyle === "icon" ? "" : shown.join("   "));
+        this.set_applet_label(this.panelStyle === "icon" ? "" : parts.join("   "));
         if (this._applet_label) {
             this._applet_label.set_style(LEVEL_COLOR[worst] ? `color: ${LEVEL_COLOR[worst]};` : null);
-            if (localPart && this.panelStyle !== "icon") {
-                // Only the Local AI part is green; the limits keep their warning color.
-                const esc = (text) => GLib.markup_escape_text(text, -1);
-                const lead = parts.length ? `${esc(parts.join("   "))}   ` : "";
-                this._applet_label.clutter_text.set_markup(`${lead}<span foreground="${LOCAL_COLOR}">${esc(localPart)}</span>`);
-            }
         }
         this.set_applet_tooltip(tips.length ? tips.join("\n\n") : this._fatal || "Needle");
         this._checkAlerts(providers);

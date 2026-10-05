@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.7.1</xbar.version>
+# <xbar.version>v1.7.2</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance, plus a count of your local AI tokens.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -218,8 +218,7 @@ def render_title(providers):
             parts.append(paint(text, level(left)) if level(left) != "ok" else text)
             lefts.append(left)
         elif p.get("tally"):
-            # Local AI counts up, so it is always green and never moves the gauge.
-            parts.append(paint(f"L {compact(p['tally']['all_time'])}↑", "ok"))
+            pass  # Local AI isn't a limit, so it stays out of the title; it has its own card.
         elif p.get("balance") and p["balance"].get("remaining") is not None:
             b = p["balance"]
             text = f"${round(b['remaining'])}"

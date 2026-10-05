@@ -570,6 +570,15 @@ class MacAlertTests(unittest.TestCase):
         self.assertEqual(self.sent, ["Claude is nearly out: 5% left"])
 
 
+    def test_local_ai_stays_out_of_the_menu_bar_title(self):
+        local = {"id": "local", "name": "Local AI", "tally": {"all_time": 412}}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.mac.render_title([self.provider(42), local])
+        title = out.getvalue().splitlines()[0]
+        self.assertIn("C 58%", title)
+        self.assertNotIn("412", title)
+
 class UpdateTests(unittest.TestCase):
     RELEASE = {"latest": "99.0.0", "url": "https://example.test/r", "notes": "New", "zipball": "z"}
 

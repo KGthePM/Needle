@@ -6,7 +6,7 @@ Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you hav
 
 The compact display reads like `C 58%   G 71%   Z 82%   $14`, where `C` is Claude, `G` is ChatGPT/Codex, and `Z` is z.ai. Cinnamon and macOS show the tighter of each service's 5-hour and weekly windows, so the number answers "how much can I use right now." The display turns amber under 30% and red under 10%. Click it for the full breakdown. When a gauge first turns red you get a desktop notification, and another when it's back above 10%. Nothing repeats while it sits in the red. This works on all three platforms; see [Notifications](#notifications).
 
-If you run models on your own computer, Needle also counts those tokens: `L 133K↑`, always in green. It counts up as a reward rather than down as a limit; see [Local AI](#local-ai).
+If you run models on your own computer, Needle also counts those tokens in the popup. It counts up as a reward rather than down as a limit, so it stays out of the compact display; see [Local AI](#local-ai).
 
 ## Install on Linux Mint
 
@@ -30,7 +30,7 @@ Use **Settings** to change a key or remove a service. Removing a keyed service c
 
 ## Local AI
 
-Needle counts the tokens you run on local models and shows the running total next to your limits, like `L 133K↑`. The popup shows today, this week, all time, your top three models, and what those tokens would have cost on a hosted API. It needs no setup: it appears once Needle has found some local usage.
+Needle counts the tokens you run on local models and shows the running total in its own card in the popup, like `133K↑`. It isn't a limit, so it stays out of the menu bar, panel and tray text. The card shows today, this week, all time, your top three models, and what those tokens would have cost on a hosted API. It needs no setup: it appears once Needle has found some local usage.
 
 Where the numbers come from (all read-only, nothing leaves your computer):
 
