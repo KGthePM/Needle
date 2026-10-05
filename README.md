@@ -4,7 +4,7 @@ A PineCompute project.
 
 Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you have left: a Cinnamon panel applet on Linux Mint, a SwiftBar menu-bar item on macOS, and a native system-tray app on Windows. All three use the same fetcher and settings format.
 
-The compact display reads like `C 58%   G 71%   Z 82%   $14`, where `C` is Claude, `G` is ChatGPT/Codex, and `Z` is z.ai. Cinnamon and macOS show the tighter of each service's 5-hour and weekly windows, so the number answers "how much can I use right now." The display turns amber under 30% and red under 10%. Click it for the full breakdown. When a gauge first turns red you also get a desktop notification (once — it stays quiet until the provider recovers; turn it off in the applet's settings).
+The compact display reads like `C 58%   G 71%   Z 82%   $14`, where `C` is Claude, `G` is ChatGPT/Codex, and `Z` is z.ai. Cinnamon and macOS show the tighter of each service's 5-hour and weekly windows, so the number answers "how much can I use right now." The display turns amber under 30% and red under 10%. Click it for the full breakdown. When a gauge first turns red you get a desktop notification, and another when it's back above 10%. Nothing repeats while it sits in the red. This works on all three platforms; see [Notifications](#notifications).
 
 ## Install on Linux Mint
 
@@ -29,6 +29,18 @@ Use **Settings** to change a key or remove a service. Removing a keyed service c
 ## Reading the gauges
 
 The colored fill is what's left. The thin tick is how much time is left in that window. If the fill sits left of the tick, you're using it up faster than it resets.
+
+When you are using a window faster than it resets, Needle estimates when it will run out at your average rate so far in that window, for example "At this pace it runs out around 3:40 PM, 1h 20m before it resets." It waits until 5% of the window has passed before guessing, so one early burst doesn't produce a wild number. `needle --text` shows the same estimate.
+
+## Notifications
+
+Needle sends one notification when a service first drops to 10% or less, and one more when it's back above 10% (usually because the window reset). It stays quiet in between.
+
+- **Linux**: a desktop notification. Turn it off with **Notify when a gauge turns red** in the applet's settings.
+- **macOS**: a Notification Center banner. Turn it off with **Settings** > **Notify when a limit runs low**. Banners come from Script Editor, because SwiftBar runs `osascript` to send them, so allow notifications for Script Editor in **System Settings** > **Notifications** if none show up.
+- **Windows**: a notification from the tray icon. Turn it off with **Settings** > **Notify when a limit runs low**.
+
+On macOS and Windows the setting is `"notify": false` at the top level of `config.json`, or `needle --set-notify off`.
 
 ## Refreshing
 
@@ -91,7 +103,7 @@ The script installs SwiftBar with Homebrew if it's missing, copies the plugin in
 
 On the Mac, Claude Code keeps its sign-in in the Keychain. During install, macOS asks to let `security` read it. Click **Always Allow** so the menu bar can refresh without prompting. That permission covers the `security` tool, so other scripts that use it could read that one item without asking. Click **Allow** instead if you'd rather approve it each time.
 
-In the menu, each bar is green, amber or red by how much is left, and the word after the reset time says how you're pacing: **▲ fast** (using it faster than it resets), **● on pace**, or **▼ plenty**. Hover over a row for the full sentence. Services without a key are grouped on one "Not set up" line. SwiftBar refreshes every 5 minutes (the `.5m.` in the file name).
+In the menu, each bar is green, amber or red by how much is left, and the word after the reset time says how you're pacing: **▲ fast** (using it faster than it resets), **● on pace**, or **▼ plenty**. When it's fast and Needle can estimate when it runs out, the word becomes that time, for example **▲ out 3:40 PM**. Hover over a row for the full sentence. Services without a key are grouped on one "Not set up" line. SwiftBar refreshes every 5 minutes (the `.5m.` in the file name).
 
 The installer offers to open SwiftBar at login, so Needle is back in the menu bar after a restart. Needle uses native **Add more** and **Settings** submenus on macOS. To change login behavior later, use **System Settings** > **General** > **Login Items**. On Linux the applet loads with the panel, so there's nothing to set.
 

@@ -467,6 +467,108 @@ class ProviderTests(unittest.TestCase):
         })
 
 
+class PaceTests(unittest.TestCase):
+    def window(self, used, resets_in, length=10000):
+        return {"label": "5-hour", "used": used, "resets_at": 1000 + resets_in, "window_seconds": length}
+
+    def test_fast_window_projects_run_out_before_reset(self):
+        w = self.window(used=60, resets_in=6000)  # 4000s in, 60% used
+        needle.annotate_pace(w, 1000)
+        self.assertEqual(w["pace"], "fast")
+        # 40% left at 15%/1000s is about 2667s more.
+        self.assertEqual(w["runs_out_at"], 1000 + round(40 * 4000 / 60))
+
+    def test_even_and_slow_windows_have_no_run_out(self):
+        even = self.window(used=40, resets_in=6000)
+        slow = self.window(used=10, resets_in=6000)
+        needle.annotate_pace(even, 1000)
+        needle.annotate_pace(slow, 1000)
+        self.assertEqual((even["pace"], slow["pace"]), ("even", "slow"))
+        self.assertNotIn("runs_out_at", even)
+        self.assertNotIn("runs_out_at", slow)
+
+    def test_too_early_or_already_out_skips_projection(self):
+        early = self.window(used=30, resets_in=9800)  # only 2% of the window has passed
+        out = self.window(used=100, resets_in=6000)
+        needle.annotate_pace(early, 1000)
+        needle.annotate_pace(out, 1000)
+        self.assertEqual(early["pace"], "fast")
+        self.assertNotIn("runs_out_at", early)
+        self.assertEqual(out["pace"], "fast")
+        self.assertNotIn("runs_out_at", out)
+
+    def test_windows_without_length_get_nothing(self):
+        w = {"label": "Tool calls", "used": 90, "resets_at": 5000, "window_seconds": None}
+        needle.annotate_pace(w, 1000)
+        self.assertNotIn("pace", w)
+
+    def test_snapshot_measures_pace_when_the_numbers_were_read(self):
+        fetch = mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 60, "resets_at": 7000, "window_seconds": 10000}]})
+        providers = [("zai", "z.ai", fetch)]
+        config = {"zai": {"enabled": True}}
+        with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+            needle.time, "time", return_value=1000
+        ):
+            first = needle.snapshot(config, {})
+        with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+            needle.time, "time", return_value=1030
+        ):
+            second = needle.snapshot(config, first, cached_only=True)
+        self.assertEqual(first["providers"][0]["windows"][0]["runs_out_at"], 3667)
+        self.assertEqual(second["providers"][0]["windows"][0]["runs_out_at"], 3667)
+
+
+class NotifySettingTests(unittest.TestCase):
+    def test_set_notify_command_updates_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "config.json"
+            config.write_text(json.dumps({"claude": {"enabled": True}}), encoding="utf-8")
+            with mock.patch.object(needle, "CONFIG_PATH", config):
+                self.assertEqual(needle.run_config_command(["--set-notify", "off"]), 0)
+                self.assertIs(json.loads(config.read_text())["notify"], False)
+                self.assertEqual(needle.run_config_command(["--set-notify", "on"]), 0)
+                saved = json.loads(config.read_text())
+        self.assertIs(saved["notify"], True)
+        self.assertEqual(saved["claude"], {"enabled": True})
+
+    def test_set_notify_rejects_other_values(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "config.json"
+            with mock.patch.object(needle, "CONFIG_PATH", config), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(needle.run_config_command(["--set-notify", "maybe"]), 2)
+            self.assertFalse(config.exists())
+
+
+class MacAlertTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("needle_mac", ROOT / "mac" / "needle.5m.py")
+        self.mac = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.mac)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.mac.ALERTS = Path(self.temp.name) / "mac-alerts.json"
+        self.sent = []
+        self.mac.notify = self.sent.append
+
+    def provider(self, used):
+        return {"id": "claude", "name": "Claude", "windows": [{"label": "5-hour", "used": used}]}
+
+    def test_alerts_once_when_low_and_once_when_back(self):
+        self.mac.check_alerts([self.provider(92)], {})
+        self.mac.check_alerts([self.provider(95)], {})
+        self.mac.check_alerts([self.provider(0)], {})
+        self.mac.check_alerts([self.provider(0)], {})
+        self.assertEqual(self.sent, ["Claude is nearly out: 8% left", "Claude is back: 100% left"])
+
+    def test_removed_service_and_turned_off_stay_quiet(self):
+        self.mac.check_alerts([self.provider(95)], {})
+        self.mac.check_alerts([], {})
+        self.mac.check_alerts([self.provider(0)], {})
+        self.mac.check_alerts([self.provider(95)], {"notify": False})
+        self.assertEqual(self.sent, ["Claude is nearly out: 5% left"])
+
+
 class UpdateTests(unittest.TestCase):
     RELEASE = {"latest": "99.0.0", "url": "https://example.test/r", "notes": "New", "zipball": "z"}
 

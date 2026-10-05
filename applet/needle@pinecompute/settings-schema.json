@@ -114,6 +114,6 @@
     "type": "switch",
     "default": true,
     "description": "Notify when a gauge turns red",
-    "tooltip": "One desktop notification the first time a provider drops to 10% or less. Stays quiet until it recovers."
+    "tooltip": "One desktop notification the first time a provider drops to 10% or less, and one more when it's back above 10%."
   }
 }

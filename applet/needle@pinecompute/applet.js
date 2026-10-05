@@ -78,6 +78,19 @@ function duration(secs) {
     return `${Math.max(m, 1)}m`;
 }
 
+// Clock time in the user's 12/24-hour preference, with the weekday when it isn't today.
+function clock(ts) {
+    let use24h = false;
+    try {
+        use24h = new Gio.Settings({ schema_id: "org.cinnamon.desktop.interface" }).get_boolean("clock-use-24h");
+    } catch (e) { /* schema missing: keep 12-hour */ }
+    const t = GLib.DateTime.new_from_unix_local(Math.round(ts));
+    const today = GLib.DateTime.new_now_local();
+    const sameDay = t.get_year() === today.get_year() && t.get_day_of_year() === today.get_day_of_year();
+    const time = t.format(use24h ? "%H:%M" : "%l:%M %p").trim();
+    return sameDay ? time : `${t.format("%a")} ${time}`;
+}
+
 function ago(ts) {
     const s = now() - ts;
     if (s < 60) return "just now";
@@ -509,26 +522,34 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._checkAlerts(providers);
     }
 
-    // One desktop notification per provider the first time it drops to crit,
-    // and only after it has climbed back out. No spam while it sits there.
+    // One desktop notification per provider the first time it drops to crit, and one
+    // more when it climbs back out. No spam while it sits there.
     _checkAlerts(providers) {
-        if (!this.notifyAlerts) return;
-        const crit = {};
+        if (!this.notifyAlerts) {
+            this._alerted = {};
+            return;
+        }
+        const lefts = {};
         for (const p of providers) {
-            if (!p.windows) continue;
-            const left = bindingLeft(p);
-            if (left !== null && left <= 10) crit[p.id] = Math.round(left);
+            if (p.windows) lefts[p.id] = bindingLeft(p);
         }
-        for (const id of Object.keys(crit)) {
-            if (this._alerted[id]) continue;
-            this._alerted[id] = true;
-            const name = (providers.find((p) => p.id === id) || {}).name || id;
-            const cmd = ["notify-send", "-u", "critical", "Needle",
-                `${name} is nearly out: ${crit[id]}% left`];
-            try { Util.spawn(cmd); } catch (e) { global.logError(`${UUID}: ${e}`); }
+        const send = (urgency, text) => {
+            try { Util.spawn(["notify-send", "-u", urgency, "Needle", text]); } catch (e) { global.logError(`${UUID}: ${e}`); }
+        };
+        for (const p of providers) {
+            const left = lefts[p.id];
+            if (left === null || left === undefined) continue;
+            if (left <= 10 && !this._alerted[p.id]) {
+                this._alerted[p.id] = true;
+                send("critical", `${p.name} is nearly out: ${Math.round(left)}% left`);
+            } else if (left > 10 && this._alerted[p.id]) {
+                delete this._alerted[p.id];
+                send("normal", `${p.name} is back: ${Math.round(left)}% left`);
+            }
         }
+        // Services that were removed or lost their data just drop out quietly.
         for (const id of Object.keys(this._alerted)) {
-            if (!crit[id]) delete this._alerted[id];
+            if (lefts[id] === null || lefts[id] === undefined) delete this._alerted[id];
         }
     }
 
@@ -825,6 +846,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
             tick = this.showRemaining ? timeLeft : 1 - timeLeft;
         }
         box.add(this._bar(shown / 100, level(left), tick), { x_fill: false, x_align: St.Align.START });
+        if (w.runs_out_at) {
+            let text = `At this pace it runs out around ${clock(w.runs_out_at)}`;
+            if (w.resets_at) text += `, ${duration(w.resets_at - w.runs_out_at)} before it resets`;
+            box.add(this._note(`${text}.`, false));
+        }
         return box;
     }
 

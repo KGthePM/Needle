@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.5.0</xbar.version>
+# <xbar.version>v1.6.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -23,6 +23,8 @@ from pathlib import Path
 FETCHER = Path.home() / ".local" / "bin" / "needle"
 CONFIG = Path(os.environ.get("NEEDLE_CONFIG") or
               Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "needle" / "config.json").expanduser()
+# Which providers have had a "nearly out" notification, so each one fires once per dip.
+ALERTS = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "needle" / "mac-alerts.json"
 PY = sys.executable or "/usr/bin/python3"
 PLUGIN = Path(__file__).resolve()
 # Providers whose key can be pasted from the menu: (name, where to get one, dialog hint).
@@ -87,6 +89,13 @@ def duration(secs):
 
 def clock(ts):
     return time.strftime("%-I:%M %p", time.localtime(ts))
+
+
+def day_clock(ts):
+    """Clock time, with the weekday when it isn't today."""
+    if time.localtime(ts)[:3] == time.localtime()[:3]:
+        return clock(ts)
+    return time.strftime("%a ", time.localtime(ts)) + clock(ts)
 
 
 def freshness(p):
@@ -216,16 +225,24 @@ def gauge_symbol(left):
     return f"gauge.with.dots.needle.{step}percent"
 
 
-def pace(w, left):
-    """Compare what's left with how much of the window is left: fast, even or slow."""
-    if not (w.get("window_seconds") and w.get("resets_at")):
-        return None, None
-    time_left = max(0.0, min(1.0, (w["resets_at"] - time.time()) / w["window_seconds"]))
-    if left / 100 < time_left - 0.10:
-        return "fast", "You're using it faster than it resets."
-    if left / 100 > time_left + 0.10:
-        return "slow", "Plenty of room for the time left."
-    return "even", "Right on pace."
+PACE_NOTE = {"fast": "You're using it faster than it resets.", "even": "Right on pace.",
+             "slow": "Plenty of room for the time left."}
+
+
+def pace_text(w):
+    """Short pace word for the row and a sentence for its tooltip. The fetcher decides the pace."""
+    speed = w.get("pace")
+    if speed not in PACE:
+        return "", ""
+    text, ink = PACE[speed]
+    note = PACE_NOTE[speed]
+    if w.get("runs_out_at"):
+        text = f"▲ out {day_clock(w['runs_out_at'])}"
+        note = f"At this pace it runs out around {day_clock(w['runs_out_at'])}"
+        if w.get("resets_at"):
+            note += f", {duration(w['resets_at'] - w['runs_out_at'])} before it resets"
+        note += "."
+    return paint(text, ink), note
 
 
 def render_provider(p, width):
@@ -235,7 +252,7 @@ def render_provider(p, width):
     for w in p.get("windows", []):
         left = 100 - w["used"]
         ink = level(left)
-        speed, note = pace(w, left)
+        speed, note = pace_text(w)
         reset = duration(w["resets_at"] - time.time()) if w.get("resets_at") else ""
         line = f"{w['label']:<{width}}{bar(left / 100, ink)} {paint(f'{round(left):>4}%', ink)}"
         if w.get("detail"):
@@ -243,7 +260,7 @@ def render_provider(p, width):
         else:
             line += f"  {paint('↻', 'dim')} {reset:<8}"
             if speed:
-                line += f"  {paint(*PACE[speed])}"
+                line += f"  {speed}"
         tip = f"{round(left)}% left" + (f", resets in {reset}" if reset else "") + (f". {note}" if note else "")
         item(line, tooltip=tip, **MONO)
 
@@ -371,9 +388,50 @@ def render_settings(data, enabled, stored_keys):
         status = update_status(data)
         if status:
             item(f"--{status}", **SMALL)
+    notify_on = notifications_on(load_config())
+    item("--Notify when a limit runs low", checked=notify_on, bash=PY, param1=str(FETCHER),
+         param2="--set-notify", param3="off" if notify_on else "on", terminal=False, refresh=True)
     item("--Open raw config", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
     item("--Debug in Terminal", bash=PY, param1=str(FETCHER), param2="--text", param3="--debug",
          param4="--force", terminal=True)
+
+
+# ------------------------------------------------------------------ notifications
+
+def notifications_on(config):
+    return config.get("notify", True) is not False
+
+
+def notify(message):
+    osascript(f"display notification {json.dumps(message, ensure_ascii=False)} with title \"Needle\"")
+
+
+def check_alerts(providers, config):
+    """Notify once when a provider drops to 10% or less, and once more when it's back.
+
+    SwiftBar starts a new process every run, so who has been alerted lives in a file.
+    """
+    try:
+        alerted = set(json.loads(ALERTS.read_text()))
+    except (OSError, ValueError, TypeError):
+        alerted = set()
+    if not notifications_on(config):
+        low = set()
+    else:
+        lefts = {p["id"]: binding_left(p) for p in providers}
+        low = {pid for pid, left in lefts.items() if left is not None and left <= 10}
+        for p in providers:
+            pid, left = p["id"], lefts[p["id"]]
+            if pid in low and pid not in alerted:
+                notify(f"{p['name']} is nearly out: {round(left)}% left")
+            elif pid in alerted and pid not in low and left is not None:
+                notify(f"{p['name']} is back: {round(left)}% left")
+    if low != alerted:
+        try:
+            ALERTS.parent.mkdir(parents=True, exist_ok=True)
+            ALERTS.write_text(json.dumps(sorted(low)))
+        except OSError:
+            pass
 
 
 # ------------------------------------------------------------------ key dialog
@@ -477,6 +535,8 @@ def main():
     connected = {p["id"] for p in providers}
     render_title(providers)
     sep()
+    if data:
+        check_alerts(providers, config)
 
     if providers:
         if fatal:

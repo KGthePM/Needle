@@ -9,6 +9,7 @@ needle: one JSON snapshot of your Claude, ChatGPT/Codex, z.ai and OpenRouter lim
   needle --debug    also dump raw API responses to stderr
   needle --update   download the latest release and rerun the installer
   needle --check-updates  look for a new release now instead of waiting for the daily check
+  needle --set-notify on|off  low-limit notifications on the Mac and Windows front ends
 
 Standard library only. Works on Linux, macOS and Windows.
 """
@@ -31,7 +32,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 TIMEOUT = 10
 
 
@@ -489,6 +490,15 @@ def configure_tray_hover_percentage_mode(mode):
     write_json(CONFIG_PATH, cfg)
 
 
+def configure_notify(value):
+    """Turn the low-limit and back-again notifications on or off (Mac and Windows)."""
+    if value not in ("on", "off"):
+        raise ValueError("--set-notify takes on or off.")
+    cfg = load_config_for_update()
+    cfg["notify"] = value == "on"
+    write_json(CONFIG_PATH, cfg)
+
+
 def configure_windows_theme(mode):
     if mode not in WINDOWS_THEME_MODES:
         raise ValueError(f"Unknown Windows theme: {mode}")
@@ -537,6 +547,7 @@ def run_config_command(argv):
         "--set-tray-hover-percentage-mode": "tray-hover-percentage-mode",
         "--set-windows-theme": "windows-theme",
         "--set-windows-custom-theme": "windows-custom-theme",
+        "--set-notify": "notify",
     }
     selected = [(flag, action) for flag, action in commands.items() if flag in argv]
     if not selected:
@@ -551,7 +562,8 @@ def run_config_command(argv):
             index = argv.index(flag)
             value = argv[index + 1]
         except IndexError:
-            argument = "a mode" if action in {"tray-hover-percentage-mode", "windows-theme"} else "a service id"
+            argument = "a mode" if action in {"tray-hover-percentage-mode", "windows-theme"} \
+                else "on or off" if action == "notify" else "a service id"
             print(f"{flag} requires {argument}.", file=sys.stderr)
             return 2
     try:
@@ -565,6 +577,8 @@ def run_config_command(argv):
             configure_tray_hover_percentage_mode(value)
         elif action == "windows-theme":
             configure_windows_theme(value)
+        elif action == "notify":
+            configure_notify(value)
         elif action == "windows-custom-theme":
             try:
                 palette = json.loads(sys.stdin.read())
@@ -679,6 +693,40 @@ def self_update():
     return code
 
 
+# ----------------------------------------------------------------- pace
+
+PACE_MARGIN = 0.10          # how far usage may drift from the clock before it counts as fast or slow
+PROJECT_AFTER = 0.05        # share of a window that must have passed before projecting a run-out time
+
+
+def annotate_pace(w, measured_at):
+    """Add pace ("fast", "even" or "slow") and, when it is fast, runs_out_at to one window.
+
+    Both are worked out at the moment the usage was read, not now, so cached numbers
+    keep the same answer. runs_out_at assumes the rest of the window goes at the
+    window's average rate so far, and is only set when that runs out before the reset.
+    """
+    w.pop("pace", None)
+    w.pop("runs_out_at", None)
+    length, reset, used = w.get("window_seconds"), w.get("resets_at"), w.get("used")
+    if not (length and reset and measured_at) or used is None:
+        return
+    time_left = max(0.0, min(1.0, (reset - measured_at) / length))
+    left = (100 - used) / 100
+    if left < time_left - PACE_MARGIN:
+        w["pace"] = "fast"
+    elif left > time_left + PACE_MARGIN:
+        w["pace"] = "slow"
+    else:
+        w["pace"] = "even"
+        return
+    elapsed = length - (reset - measured_at)
+    if w["pace"] == "fast" and 0 < used < 100 and elapsed >= PROJECT_AFTER * length:
+        runs_out = measured_at + (100 - used) * elapsed / used
+        if runs_out < reset:
+            w["runs_out_at"] = round(runs_out)
+
+
 # ----------------------------------------------------------------- main
 
 def next_refresh_at(provider, force=False):
@@ -730,6 +778,8 @@ def snapshot(cfg, cache, cached_only=False, force=False):
         # Front ends show these so people know whether Refresh would change anything yet.
         provider["refresh_at"] = next_refresh_at(provider)
         provider["force_refresh_at"] = next_refresh_at(provider, force=True)
+        for w in provider.get("windows", []):
+            annotate_pace(w, provider.get("fetched_at"))
     return {"version": VERSION, "updated": now, "providers": out}
 
 
@@ -789,6 +839,8 @@ def print_text(data):
         print(head)
         for w in p.get("windows", []):
             reset = f"resets in {human(w['resets_at'] - now)}" if w.get("resets_at") else ""
+            if w.get("runs_out_at"):
+                reset += f", runs out in about {human(w['runs_out_at'] - now)} at this pace"
             print(f"  {w['label']:<14}{100 - w['used']:>5.0f}% left   {reset}")
         b = p.get("balance")
         if b:

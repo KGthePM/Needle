@@ -377,16 +377,24 @@ function Format-UpdateStatus {
     return 'Up to date, checked {0}' -f $when
 }
 
+# The fetcher decides the pace from when the numbers were read.
 function Get-Pace {
-    param($Window, [double]$Left)
-    $length = [double](Get-Value $Window 'window_seconds' 0)
-    $reset = [double](Get-Value $Window 'resets_at' 0)
-    if ($length -le 0 -or $reset -le 0) { return '' }
-    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $timeLeft = [Math]::Max(0, [Math]::Min(1, ($reset - $now) / $length))
-    if (($Left / 100) -lt ($timeLeft - 0.10)) { return 'fast' }
-    if (($Left / 100) -gt ($timeLeft + 0.10)) { return 'plenty' }
-    return 'on pace'
+    param($Window)
+    switch ([string](Get-Value $Window 'pace' '')) {
+        'fast' { return 'fast' }
+        'slow' { return 'plenty' }
+        'even' { return 'on pace' }
+    }
+    return ''
+}
+
+# Local short time, with the weekday when it isn't today.
+function Format-Clock {
+    param([double]$Timestamp)
+    $time = [DateTimeOffset]::FromUnixTimeSeconds([long]$Timestamp).LocalDateTime
+    $text = $time.ToString('t')
+    if ($time.Date -ne [DateTime]::Today) { $text = $time.ToString('ddd') + ' ' + $text }
+    return $text
 }
 
 function New-GaugeIcon {
@@ -549,6 +557,7 @@ if (Test-Path -LiteralPath $script:CachePath) {
     try { $script:Data = Get-Content -LiteralPath $script:CachePath -Raw | ConvertFrom-Json } catch {}
 }
 
+$script:Alerted = @{}
 $script:Tray = [Windows.Forms.NotifyIcon]::new()
 $script:Tray.Visible = $true
 $script:UiFont = [Drawing.Font]::new('Segoe UI', 9)
@@ -1190,12 +1199,18 @@ function Render-UsageView {
             $bar = ('#' * $filled) + ('-' * (16 - $filled))
             $resetAt = [double](Get-Value $window 'resets_at' 0)
             $reset = if ($resetAt -gt 0) { Format-Duration ($resetAt - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) } else { '' }
-            $pace = Get-Pace $window $left
+            $pace = Get-Pace $window
             $detail = [string](Get-Value $window 'detail' '')
             $tail = if ($detail) { $detail } elseif ($reset -and $pace) { "$reset | $pace" } elseif ($reset) { $reset } else { $pace }
             $row = '{0,-12} [{1}] {2,3}% left' -f ([string](Get-Value $window 'label' 'Limit')), $bar, [Math]::Round($left)
             if ($tail) { $row += " | $tail" }
             [void](Add-FlyoutText $row 34 370 $script:UiMonoFont (Get-LevelThemeColor $left) Left 5)
+            $runsOut = [double](Get-Value $window 'runs_out_at' 0)
+            if ($runsOut -gt 0) {
+                $note = 'At this pace it runs out around {0}' -f (Format-Clock $runsOut)
+                if ($resetAt -gt 0) { $note += ', {0} before it resets' -f (Format-Duration ($resetAt - $runsOut)) }
+                [void](Add-FlyoutText "$note." 34 370 $script:UiFont (Get-ThemeColor 'muted') Left 5)
+            }
         }
 
         $balance = Get-Value $provider 'balance'
@@ -1492,6 +1507,21 @@ function Render-SettingsView {
         }
     })
     $script:Content.Controls.Add($startup)
+    $script:RenderY += 32
+    $notify = [Windows.Forms.CheckBox]::new()
+    $notify.Text = 'Notify when a limit runs low'
+    $notify.Location = [Drawing.Point]::new(20, $script:RenderY)
+    $notify.Size = [Drawing.Size]::new(384, 28)
+    $notify.Checked = $false -ne (Get-Value $config 'notify' $true)
+    $notify.Font = $script:UiFont
+    $notify.BackColor = Get-ThemeColor 'background'
+    $notify.ForeColor = Get-ThemeColor 'text'
+    $notify.Add_Click({
+        param($sender, $eventArgs)
+        $value = if ($sender.Checked) { 'on' } else { 'off' }
+        if (-not (Invoke-ConfigCommand '--set-notify' $value)) { $sender.Checked = -not $sender.Checked }
+    })
+    $script:Content.Controls.Add($notify)
     $script:RenderY += 37
     if ($script:ConfigError) { [void](Add-FlyoutText $script:ConfigError 16 388 $script:UiFont (Get-ThemeColor 'critical') Left 8) }
     Add-FlyoutDivider 0 10
@@ -1620,6 +1650,46 @@ function Show-Flyout {
     [void][NeedleNativeMethods]::SetForegroundWindow($script:Flyout.Handle)
 }
 
+# One notification per provider the first time it drops to 10% or less, and one more
+# when it's back above 10%. Nothing repeats while it sits there.
+function Update-Alerts {
+    if (-not $script:Data) { return }
+    $config = Get-Config
+    if ($false -eq (Get-Value $config 'notify' $true)) {
+        $script:Alerted = @{}
+        return
+    }
+    $enabledIds = @(Get-EnabledServiceIds $config)
+    $lefts = @{}
+    $low = @()
+    $back = @()
+    foreach ($provider in @(Get-Value $script:Data 'providers' @())) {
+        $id = [string](Get-Value $provider 'id' '')
+        if ($id -notin $enabledIds -or -not (Test-ProviderConnected $provider)) { continue }
+        $left = Get-BindingLeft $provider
+        if ($null -eq $left) { continue }
+        $lefts[$id] = $left
+        $name = [string](Get-Value $provider 'name' $id)
+        if ($left -le 10 -and -not $script:Alerted.ContainsKey($id)) {
+            $script:Alerted[$id] = $true
+            $low += '{0} is nearly out: {1}% left' -f $name, [Math]::Round($left)
+        }
+        elseif ($left -gt 10 -and $script:Alerted.ContainsKey($id)) {
+            $script:Alerted.Remove($id)
+            $back += '{0} is back: {1}% left' -f $name, [Math]::Round($left)
+        }
+    }
+    # Services that were removed or lost their data just drop out quietly.
+    foreach ($id in @($script:Alerted.Keys)) {
+        if (-not $lefts.ContainsKey($id)) { $script:Alerted.Remove($id) }
+    }
+    # A second balloon replaces the first, so everything goes in one.
+    $lines = @($low) + @($back)
+    if ($lines.Count -eq 0) { return }
+    $icon = if ($low.Count) { [Windows.Forms.ToolTipIcon]::Warning } else { [Windows.Forms.ToolTipIcon]::Info }
+    $script:Tray.ShowBalloonTip(10000, 'Needle', ($lines -join "`n"), $icon)
+}
+
 function Update-Tray {
     $left = if ($script:Data) { Get-LowestLeft $script:Data } else { $null }
     $icon = New-GaugeIcon $left
@@ -1685,6 +1755,7 @@ $script:PollTimer.Add_Tick({
         else {
             try { $script:Data = $stdout | ConvertFrom-Json }
             catch { $script:LastError = 'The fetcher returned unreadable data.' }
+            if (-not $script:LastError) { Update-Alerts }
         }
     }
     finally {
