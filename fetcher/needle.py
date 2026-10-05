@@ -33,7 +33,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 TIMEOUT = 10
 
 
@@ -528,13 +528,20 @@ def read_ollama_journal(store):
     return bool(state.get("cursor"))
 
 
-def ollama_log_path(platform=None, environ=None, home=None):
+def ollama_log_paths(platform=None, environ=None, home=None):
+    """Where Ollama may write its log: the desktop app's server.log, and on the Mac also
+    the log of the Homebrew service (`brew services start ollama`)."""
     platform = platform or sys.platform
     environ = os.environ if environ is None else environ
     home = Path.home() if home is None else Path(home)
     if platform == "win32":
-        return Path(environ.get("LOCALAPPDATA") or home / "AppData" / "Local") / "Ollama" / "server.log"
-    return home / ".ollama" / "logs" / "server.log"
+        return [Path(environ.get("LOCALAPPDATA") or home / "AppData" / "Local") / "Ollama" / "server.log"]
+    paths = [home / ".ollama" / "logs" / "server.log"]
+    if platform == "darwin":
+        prefixes = [environ.get("HOMEBREW_PREFIX"), "/opt/homebrew", "/usr/local"]
+        for prefix in dict.fromkeys(filter(None, prefixes)):
+            paths.append(Path(prefix) / "var" / "log" / "ollama.log")
+    return paths
 
 
 def file_stamp(line):
@@ -551,9 +558,14 @@ def file_stamp(line):
 
 
 def read_ollama_log(store, path):
-    """Read what Ollama appended to server.log since last time. A shrunk or replaced file
-    (rotation) is read again from the start."""
-    state = store.setdefault("sources", {}).setdefault("ollama_log", {})
+    """Read what Ollama appended to a log since last time. A shrunk or replaced file
+    (rotation) is read again from the start. Each log keeps its own bookmark."""
+    sources = store.setdefault("sources", {})
+    logs = sources.setdefault("ollama_logs", {})
+    old = sources.pop("ollama_log", None)  # 1.7.0 kept a single bookmark
+    if isinstance(old, dict) and old.get("path"):
+        logs.setdefault(old["path"], old)
+    state = logs.setdefault(str(path), {})
     try:
         with open(path, "rb") as handle:
             head = handle.read(64).hex()
@@ -706,10 +718,10 @@ def fetch_local(cfg):
     if not isinstance(store, dict):
         store = {}
     found = []
-    log_path = Path(cfg.get("ollama_log") or ollama_log_path()).expanduser()
+    log_paths = [Path(cfg["ollama_log"]).expanduser()] if cfg.get("ollama_log") else ollama_log_paths()
     if sys.platform.startswith("linux") and read_ollama_journal(store):
         found.append("ollama")
-    elif log_path.exists() and read_ollama_log(store, log_path):
+    elif any([read_ollama_log(store, path) for path in log_paths if path.exists()]):
         found.append("ollama")
     if read_opencode(store, Path(cfg.get("opencode_dir") or opencode_dir()).expanduser()):
         found.append("opencode")

@@ -34,13 +34,14 @@ Needle counts the tokens you run on local models and shows the running total nex
 
 Where the numbers come from (all read-only, nothing leaves your computer):
 
-- **Ollama's server log.** On Linux that is the systemd journal (`journalctl -u ollama`); your user needs to be able to read it, which members of the `adm` or `systemd-journal` group can. On macOS it is `~/.ollama/logs/server.log`, and on Windows `%LOCALAPPDATA%\Ollama\server.log`. Ollama logs the prompt and generated token counts of each chat or generate request, whatever app sent it.
+- **Ollama's server log.** On Linux that is the systemd journal (`journalctl -u ollama`); your user needs to be able to read it, which members of the `adm` or `systemd-journal` group can. On macOS it is `~/.ollama/logs/server.log` for the Ollama app, and `/opt/homebrew/var/log/ollama.log` (or `/usr/local/var/log/ollama.log` on Intel Macs) if you run Ollama with `brew services start ollama`. On Windows it is `%LOCALAPPDATA%\Ollama\server.log`. Ollama logs the prompt and generated token counts of each chat or generate request, whatever app sent it. Older versions of Ollama, such as 0.12, don't log token counts; update Ollama if nothing shows up.
 - **OpenCode.** Assistant messages sent to a local provider (`ollama`, `lmstudio`, `llamacpp`, `vllm`) in `~/.local/share/opencode`. OpenCode messages to Ollama are only counted from before Ollama's log had token counts, so nothing is counted twice.
 
 What is not counted:
 
 - Embeddings (`/api/embed`). Ollama doesn't log their token counts.
 - Requests that Ollama serves without logging token counts, which includes some models on its own engine.
+- Ollama started by hand with `ollama serve` in a terminal. It logs to that terminal, not to a file.
 - Anything from before the log began recording counts, or older than your journal or log keeps. On Linux the first refresh reads the whole journal once, which can take up to a minute. After that each refresh only reads what's new.
 - LM Studio, llama.cpp and vLLM on their own; they are counted only through OpenCode.
 

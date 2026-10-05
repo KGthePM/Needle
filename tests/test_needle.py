@@ -1048,6 +1048,41 @@ class LocalAITests(unittest.TestCase):
         self.log.write_text("slot print_timing: id  0 | task 0 | prompt eval time =  10.00 ms /     6 tokens\n")
         self.assertEqual(self.fetch()["tally"]["all_time"], 50)
 
+    def test_mac_reads_the_app_log_and_the_homebrew_service_log(self):
+        home = self.temp / "home"
+        self.assertEqual(needle.ollama_log_paths("darwin", {}, home), [
+            home / ".ollama" / "logs" / "server.log",
+            Path("/opt/homebrew/var/log/ollama.log"),
+            Path("/usr/local/var/log/ollama.log"),
+        ])
+        self.assertEqual(needle.ollama_log_paths("linux", {}, home), [home / ".ollama" / "logs" / "server.log"])
+        self.assertEqual(needle.ollama_log_paths("win32", {"LOCALAPPDATA": "C:/L"}, home),
+                         [Path("C:/L") / "Ollama" / "server.log"])
+
+        brew = self.temp / "ollama.log"
+        self.log.write_text("slot print_timing: id  0 | task 0 | prompt eval time =  10.00 ms /    40 tokens\n")
+        brew.write_text("slot print_timing: id  0 | task 0 | prompt eval time =  10.00 ms /     7 tokens\n")
+        cfg = {"opencode_dir": str(self.opencode)}
+        with mock.patch.object(needle, "ollama_log_paths", return_value=[self.log, brew, self.temp / "missing.log"]):
+            tally = self.fetch(cfg=cfg)["tally"]
+            self.assertEqual((tally["all_time"], tally["sources"]), (47, ["ollama"]))
+            with brew.open("a") as handle:
+                handle.write("slot print_timing: id  0 | task 1 | prompt eval time =  10.00 ms /     3 tokens\n")
+            self.assertEqual(self.fetch(cfg=cfg)["tally"]["all_time"], 50)
+
+    def test_the_1_7_0_log_bookmark_carries_over_without_counting_twice(self):
+        self.log.write_text("slot print_timing: id  0 | task 0 | prompt eval time =  10.00 ms /    40 tokens\n")
+        size = self.log.stat().st_size
+        head = self.log.read_bytes()[:64].hex()
+        needle.write_json(needle.local_path(), {
+            "days": {"2026-10-04": {"llama3:8b": {"in": 40, "out": 0}}},
+            "sources": {"ollama_log": {"path": str(self.log), "offset": size, "head": head}},
+            "milestones": [],
+        })
+        self.assertEqual(self.fetch()["tally"]["all_time"], 40)
+        self.assertNotIn("ollama_log", self.store()["sources"])
+        self.assertEqual(self.store()["sources"]["ollama_logs"][str(self.log)]["offset"], size)
+
     def test_unreadable_log_is_skipped(self):
         self.log.mkdir()
         self.assertEqual(self.fetch()["tally"]["all_time"], 0)
