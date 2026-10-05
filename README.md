@@ -36,6 +36,7 @@ The colored fill is what's left. The thin tick is how much time is left in that 
 - Auto-refresh runs every 10 minutes by default. Cinnamon users can change it in Needle's **Settings** pane.
 - The Windows tray app also refreshes every 10 minutes and shows the compact summary when you hover over its icon. Its **Settings** page can show the 5-hour limit, weekly limit, or both; the default is weekly. Both mode reads like `G 64%/H 71%/W`.
 - Claude is never asked more than once every 5 minutes, even if you click **Refresh** repeatedly. Anthropic backs off hard on frequent polling, and that backoff can slow Claude Code itself.
+- Each service shows when its numbers were last read and, while it is cooling down, when the next refresh will fetch new ones (for example `Updated 3m ago · next refresh in 2m`). On Linux and Windows the **Refresh** buttons gray out until at least one service would return new data; the Mac menu shows the time instead, because SwiftBar only redraws every 5 minutes.
 
 ## Themes
 

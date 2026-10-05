@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.3.0</xbar.version>
+# <xbar.version>v1.4.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -85,9 +85,26 @@ def duration(secs):
     return f"{d}d {h}h" if d else f"{h}h {m}m" if h else f"{max(m, 1)}m"
 
 
-def ago(ts):
-    s = time.time() - ts
-    return "just now" if s < 60 else f"{duration(s)} ago"
+def clock(ts):
+    return time.strftime("%-I:%M %p", time.localtime(ts))
+
+
+def freshness(p):
+    """'Updated 2:14 PM · next refresh at 2:19 PM'. Clock times, not 'ago', because
+    SwiftBar only redraws the menu when the plugin reruns."""
+    if not p.get("fetched_at"):
+        return ""
+    text = f"Updated {clock(p['fetched_at'])}"
+    if p.get("refresh_at", 0) > time.time():
+        text += f" · next refresh at {clock(p['refresh_at'])}"
+    return text
+
+
+def refresh_ready_at(providers, key):
+    """When Refresh would next fetch anything new: the soonest provider off cooldown."""
+    if not providers or any(not p.get(key) for p in providers):
+        return 0
+    return min(p[key] for p in providers)
 
 
 def paint(text, ink):
@@ -230,9 +247,10 @@ def render_provider(p, width):
             item(f"{name:<{width}}{bar(frac, ink)}  {money} of ${b['total']:.2f}", **MONO)
 
     if p.get("error"):
-        when = f" Last good read {ago(p['fetched_at'])}." if p.get("stale") and p.get("fetched_at") else ""
         fix = set_key_action(p["id"]) if p["id"] in KEY_SETUP else {}
-        item(p["error"] + when, sfimage="exclamationmark.triangle", **SMALL, **fix)
+        item(p["error"], sfimage="exclamationmark.triangle", **SMALL, **fix)
+    if p.get("fetched_at"):
+        item(freshness(p), **SMALL)
 
 
 def set_key_action(pid):
@@ -308,6 +326,14 @@ def render_update(data):
     sep()
 
 
+def render_refresh(label, ready_at, **action):
+    # Stays clickable: SwiftBar won't redraw when the cooldown ends, so a disabled row
+    # could outlive it. The time tells people a click before then changes nothing.
+    if ready_at > time.time():
+        label += f" (new data after {clock(ready_at)})"
+    item(f"--{label}", **action)
+
+
 def render_settings(data, enabled, stored_keys):
     item("Settings", sfimage="gearshape")
     if enabled:
@@ -319,11 +345,11 @@ def render_settings(data, enabled, stored_keys):
             if pid in KEY_SETUP:
                 item("------Change key…", **set_key_action(pid))
             item("------Remove…", **remove_action(pid, pid in stored_keys))
-    if data and data.get("updated"):
-        item(f"--Updated {ago(data['updated'])}", **SMALL)
-    item("--Refresh", refresh=True, sfimage="arrow.clockwise")
-    item("--Refresh now (skip cooldowns)", bash=PY, param1=str(FETCHER), param2="--force",
-         terminal=False, refresh=True)
+    providers = [p for p in (data or {}).get("providers", [])
+                 if isinstance(p, dict) and p.get("id") in enabled]
+    render_refresh("Refresh", refresh_ready_at(providers, "refresh_at"), refresh=True, sfimage="arrow.clockwise")
+    render_refresh("Refresh now (skip cooldowns)", refresh_ready_at(providers, "force_refresh_at"),
+                   **force_refresh_action())
     item("--Open raw config", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
     item("--Debug in Terminal", bash=PY, param1=str(FETCHER), param2="--text", param3="--debug",
          param4="--force", terminal=True)

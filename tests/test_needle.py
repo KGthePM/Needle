@@ -254,6 +254,37 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 1)
         self.assertEqual(second["providers"][0]["attempted_at"], 1000)
 
+    def test_snapshot_reports_when_refresh_would_fetch_again(self):
+        fetch = mock.Mock(return_value={"windows": [{"label": "Weekly", "used": 10}]})
+        providers = [("codex", "ChatGPT / Codex", fetch), ("zai", "z.ai", fetch)]
+        config = {"codex": {"enabled": True}, "zai": {"enabled": True}}
+        with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+            needle.time, "time", return_value=1000
+        ):
+            result = needle.snapshot(config, {})
+        codex, zai = result["providers"]
+        self.assertEqual(codex["refresh_at"], 1300)
+        self.assertEqual(codex["force_refresh_at"], 1060)
+        self.assertEqual(zai["refresh_at"], 1060)
+        self.assertEqual(zai["force_refresh_at"], 1000)
+
+    def test_cached_snapshot_keeps_original_refresh_time(self):
+        fetch = mock.Mock(return_value={"windows": [{"label": "Weekly", "used": 10}]})
+        providers = [("claude", "Claude", fetch)]
+        config = {"claude": {"enabled": True}}
+        with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+            needle.time, "time", return_value=1000
+        ):
+            first = needle.snapshot(config, {})
+        with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+            needle.time, "time", return_value=1120
+        ):
+            second = needle.snapshot(config, first, force=True)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(second["updated"], 1120)
+        self.assertEqual(second["providers"][0]["fetched_at"], 1000)
+        self.assertEqual(second["providers"][0]["force_refresh_at"], 1300)
+
     def test_lock_timeout_returns_cache_without_fetching(self):
         fetch = mock.Mock()
 

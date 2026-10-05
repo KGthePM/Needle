@@ -22,6 +22,7 @@ const CONFIG = GLib.getenv("NEEDLE_CONFIG") || GLib.build_filenamev([GLib.get_us
 const BAR_W = 300;          // must match .aiu-track width in stylesheet.css
 const BAR_H = 6;
 const STALE_ON_OPEN = 300;  // refresh on open if the snapshot is older than this (s)
+const TICK_SECONDS = 15;    // how often an open popup updates its "ago" and countdown text
 const PANEL_TAG = { claude: "C", codex: "G", zai: "Z" };
 const PACE_WINDOWS = ["5-hour", "Weekly"]; // windows that decide "how much can I use right now"
 const THEME_MODES = [
@@ -83,6 +84,15 @@ function ago(ts) {
     return `${duration(s)} ago`;
 }
 
+// "Updated 3m ago · next refresh in 2m": how old a provider's numbers are, and whether
+// Refresh would fetch new ones yet. Claude and Codex wait 5 minutes between real reads.
+function freshness(p) {
+    if (!p.fetched_at) return "";
+    const parts = [`Updated ${ago(p.fetched_at)}`];
+    if (p.refresh_at && p.refresh_at > now()) parts.push(`next refresh in ${duration(p.refresh_at - now())}`);
+    return parts.join(" · ");
+}
+
 const money = (n) => `$${Number(n).toFixed(2)}`;
 
 function uiScale() {
@@ -140,7 +150,9 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._buildMenu();
         this._buildContextMenu();
 
+        this._tickers = [];
         this.menu.connect("open-state-changed", (menu, open) => {
+            this._setTicking(open);
             if (!open) return;
             this._render(); // fresh countdowns
             if (!this._data || now() - (this._data.updated || 0) > STALE_ON_OPEN) this._refresh(false);
@@ -158,6 +170,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
     on_applet_removed_from_panel() {
         if (this._timerId) GLib.source_remove(this._timerId);
         this._timerId = 0;
+        this._setTicking(false);
         if (this._dialog) this._dialog.close();
         this.settings.finalize();
     }
@@ -174,6 +187,27 @@ class AIUsageApplet extends Applet.TextIconApplet {
                 return true;
             });
         }
+    }
+
+    // Keeps "ago" and countdown text current while the popup stays open.
+    _setTicking(on) {
+        if (this._tickId) GLib.source_remove(this._tickId);
+        this._tickId = 0;
+        if (!on) return;
+        this._tickId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, TICK_SECONDS, () => {
+            this._tickers.forEach((tick) => tick());
+            return true;
+        });
+    }
+
+    // Seconds until Refresh would fetch anything new: the soonest provider coming off cooldown.
+    _refreshWait(force) {
+        const enabledIds = this._enabledServices().map((service) => service.id);
+        const providers = ((this._data && this._data.providers) || []).filter((p) => enabledIds.indexOf(p.id) !== -1);
+        if (!providers.length) return 0;
+        const key = force ? "force_refresh_at" : "refresh_at";
+        if (providers.some((p) => !p[key])) return 0;
+        return Math.max(0, Math.min(...providers.map((p) => p[key])) - now());
     }
 
     _refresh(force) {
@@ -385,9 +419,13 @@ class AIUsageApplet extends Applet.TextIconApplet {
     }
 
     _setBusy(busy) {
-        if (!this._refreshBtn) return;
-        if (this._refreshBtn._nameLabel) this._refreshBtn._nameLabel.text = busy ? "Refreshing…" : "Refresh";
-        this._refreshBtn.reactive = !busy;
+        [[this._refreshBtn, false], [this._forceRefreshBtn, true]].forEach(([btn, force]) => {
+            if (!btn) return;
+            const wait = busy ? 0 : this._refreshWait(force);
+            btn._valueLabel.text = busy ? "Refreshing…" : wait > 0 ? `in ${duration(wait)}` : "";
+            btn.reactive = !busy && wait <= 0;
+            btn._nameLabel.opacity = btn.reactive ? 255 : 150;
+        });
     }
 
     // -------------------------------------------------------------- drawing
@@ -470,6 +508,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
         if (!this._content) return;
         this._content.get_children().forEach((child) => child.destroy());
         this._refreshBtn = null;
+        this._forceRefreshBtn = null;
+        this._tickers = [];
         if (this._view === "add") this._renderAddView();
         else if (this._view === "settings") this._renderSettingsView();
         else if (this._view === "theme") this._renderThemeView();
@@ -489,8 +529,6 @@ class AIUsageApplet extends Applet.TextIconApplet {
         }
         header.add(label(title, "aiu-title"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
         if (!back) {
-            const updated = this._data && this._data.updated ? `Updated ${ago(this._data.updated)}` : "";
-            header.add(label(updated, "aiu-small", true), { y_fill: false, y_align: St.Align.MIDDLE });
             const close = new St.Button({ label: "×", style_class: "aiu-icon-btn", can_focus: true, track_hover: true });
             close.connect("clicked", () => this.menu.close());
             header.add(close, { y_fill: false, y_align: St.Align.MIDDLE });
@@ -586,7 +624,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
         const box = new St.BoxLayout({ style_class: "aiu-row" });
         row._nameLabel = label(name, "aiu-label");
         box.add(row._nameLabel, { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
-        if (value) box.add(label(value, "aiu-small", true), { y_fill: false, y_align: St.Align.MIDDLE });
+        row._valueLabel = label(value || "", "aiu-small", true);
+        box.add(row._valueLabel, { y_fill: false, y_align: St.Align.MIDDLE });
         row.set_child(box);
         row.connect("clicked", action);
         this._content.add(row);
@@ -624,10 +663,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
 
         this._content.add(label("UTILITIES", "aiu-section-label", true));
         this._refreshBtn = this._settingRow("Refresh", "", () => this._refresh(false));
-        this._settingRow("Refresh (skip cooldowns)", "", () => this._refresh(true));
+        this._forceRefreshBtn = this._settingRow("Refresh (skip cooldowns)", "", () => this._refresh(true));
         this._settingRow("Open raw configuration", "", () => { this.menu.close(); this._openConfig(); });
         this._settingRow("Debug in terminal", "", () => { this.menu.close(); this._openDebug(); });
         this._setBusy(this._busy);
+        this._tickers.push(() => this._setBusy(this._busy));
     }
 
     _renderThemeView() {
@@ -720,9 +760,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
         (p.windows || []).forEach((w) => card.add(this._windowRow(w)));
         if (p.balance) card.add(this._balanceRow(p.balance));
 
-        if (p.error) {
-            const when = p.stale && p.fetched_at ? ` Last good read ${ago(p.fetched_at)}.` : "";
-            card.add(this._note(p.error + when, !p.stale));
+        if (p.error) card.add(this._note(p.error, !p.stale));
+        if (p.fetched_at) {
+            const fresh = this._note(freshness(p), false);
+            card.add(fresh);
+            this._tickers.push(() => { fresh.text = freshness(p); });
         }
         return card;
     }

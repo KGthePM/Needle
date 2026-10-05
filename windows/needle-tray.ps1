@@ -314,6 +314,58 @@ function Format-Duration {
     return '{0}m' -f [Math]::Max($minutes, 1)
 }
 
+# "Updated 3m ago | next refresh in 2m": how old a provider's numbers are, and whether
+# Refresh would fetch new ones yet. Claude and Codex wait 5 minutes between real reads.
+function Format-Freshness {
+    param($Provider)
+    $fetched = [double](Get-Value $Provider 'fetched_at' 0)
+    if ($fetched -le 0) { return '' }
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $text = if ($now - $fetched -lt 60) { 'Updated just now' } else { 'Updated {0} ago' -f (Format-Duration ($now - $fetched)) }
+    $next = [double](Get-Value $Provider 'refresh_at' 0)
+    if ($next -gt $now) { $text += ' | next refresh in {0}' -f (Format-Duration ($next - $now)) }
+    return $text
+}
+
+# Seconds until a refresh would fetch anything new: the soonest enabled provider off cooldown.
+function Get-RefreshWait {
+    param([bool]$SkipCooldowns)
+    if (-not $script:Data) { return 0 }
+    $enabledIds = @(Get-EnabledServiceIds (Get-Config))
+    $key = if ($SkipCooldowns) { 'force_refresh_at' } else { 'refresh_at' }
+    $times = @(
+        foreach ($provider in @(Get-Value $script:Data 'providers' @())) {
+            if ([string](Get-Value $provider 'id' '') -in $enabledIds) { [double](Get-Value $provider $key 0) }
+        }
+    )
+    if ($times.Count -eq 0 -or $times -contains 0) { return 0 }
+    $soonest = ($times | Measure-Object -Minimum).Minimum
+    return [Math]::Max(0, $soonest - [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+}
+
+function Update-RefreshButton {
+    param($Button, [string]$Text, [bool]$SkipCooldowns)
+    if ($script:RefreshProcess) {
+        $Button.Text = 'Refreshing...'
+        $Button.Enabled = $false
+        return
+    }
+    $wait = Get-RefreshWait $SkipCooldowns
+    $Button.Text = if ($wait -gt 0) { '{0} (available in {1})' -f $Text, (Format-Duration $wait) } else { $Text }
+    $Button.Enabled = $wait -le 0
+}
+
+# Keeps "ago" and countdown text current while the flyout stays open, without a full
+# re-render that would reset scrolling and focus.
+function Update-FlyoutClock {
+    foreach ($entry in @($script:FreshnessLabels)) {
+        if (-not $entry.Label.IsDisposed) { $entry.Label.Text = Format-Freshness $entry.Provider }
+    }
+    foreach ($entry in @($script:RefreshButtons)) {
+        if (-not $entry.Button.IsDisposed) { Update-RefreshButton $entry.Button $entry.Text $entry.SkipCooldowns }
+    }
+}
+
 function Get-Pace {
     param($Window, [double]$Left)
     $length = [double](Get-Value $Window 'window_seconds' 0)
@@ -458,6 +510,8 @@ $script:PowerShellPath = (Get-Process -Id $PID).Path
 $script:Data = $null
 $script:LastError = $null
 $script:RefreshProcess = $null
+$script:FreshnessLabels = @()
+$script:RefreshButtons = @()
 $script:RefreshOutput = $null
 $script:RefreshError = $null
 $script:CurrentIcon = $null
@@ -1153,6 +1207,11 @@ function Render-UsageView {
         if ($errorText) {
             [void](Add-FlyoutText ('! ' + $errorText) 34 370 $script:UiFont (Get-ThemeColor 'critical') Left 5)
         }
+        $freshness = Format-Freshness $provider
+        if ($freshness) {
+            $freshLabel = Add-FlyoutText $freshness 34 370 $script:UiFont (Get-ThemeColor 'muted') Left 5
+            $script:FreshnessLabels += @{ Label = $freshLabel; Provider = $provider }
+        }
         Add-FlyoutDivider 7 10
     }
 
@@ -1359,19 +1418,20 @@ function Render-SettingsView {
     $script:RenderY += 39
     [void](Add-FlyoutText 'Hourly uses each provider''s 5-hour limit.' 20 384 $script:UiFont (Get-ThemeColor 'muted') Left 10)
     Add-FlyoutDivider 0 10
-    $refreshText = if ($script:RefreshProcess) { 'Refreshing...' } else { 'Refresh' }
-    $refresh = New-FlyoutButton $refreshText 16 $script:RenderY 388 34 {
+    $refresh = New-FlyoutButton 'Refresh' 16 $script:RenderY 388 34 {
         Start-Refresh $false
         Request-FlyoutRender
     }
-    $refresh.Enabled = $null -eq $script:RefreshProcess
+    Update-RefreshButton $refresh 'Refresh' $false
+    $script:RefreshButtons += @{ Button = $refresh; Text = 'Refresh'; SkipCooldowns = $false }
     $script:Content.Controls.Add($refresh)
     $script:RenderY += 40
     $force = New-FlyoutButton 'Refresh skipping cooldowns' 16 $script:RenderY 388 34 {
         Start-Refresh $true
         Request-FlyoutRender
     }
-    $force.Enabled = $null -eq $script:RefreshProcess
+    Update-RefreshButton $force 'Refresh skipping cooldowns' $true
+    $script:RefreshButtons += @{ Button = $force; Text = 'Refresh skipping cooldowns'; SkipCooldowns = $true }
     $script:Content.Controls.Add($force)
     $script:RenderY += 40
     $raw = New-FlyoutButton 'Open raw config' 16 $script:RenderY 388 34 { Open-Config }
@@ -1460,6 +1520,8 @@ function Render-Flyout {
     try {
         Set-ActiveTheme (Get-Config)
         foreach ($control in @($script:Content.Controls)) { $control.Dispose() }
+        $script:FreshnessLabels = @()
+        $script:RefreshButtons = @()
         $script:Content.AutoScrollPosition = [Drawing.Point]::Empty
         $script:RenderY = 16
         Render-Header
@@ -1596,6 +1658,9 @@ $script:PollTimer.Add_Tick({
 $script:RefreshTimer = [Windows.Forms.Timer]::new()
 $script:RefreshTimer.Interval = 10 * 60 * 1000
 $script:RefreshTimer.Add_Tick({ Start-Refresh $false })
+$script:ClockTimer = [Windows.Forms.Timer]::new()
+$script:ClockTimer.Interval = 15 * 1000
+$script:ClockTimer.Add_Tick({ if ($script:Flyout.Visible) { Update-FlyoutClock } })
 $script:Flyout.Add_Deactivate({
     if (-not $script:AllowDeactivate) { Hide-Flyout }
 })
@@ -1622,11 +1687,13 @@ try {
     Start-Refresh $Force.IsPresent
     $script:PollTimer.Start()
     $script:RefreshTimer.Start()
+    $script:ClockTimer.Start()
     [Windows.Forms.Application]::Run()
 }
 finally {
     $script:PollTimer.Stop()
     $script:RefreshTimer.Stop()
+    $script:ClockTimer.Stop()
     $refreshStopped = $true
     if ($script:RefreshProcess) {
         if (-not $script:RefreshProcess.HasExited) {
@@ -1645,6 +1712,7 @@ finally {
     $script:UiMonoFont.Dispose()
     $script:PollTimer.Dispose()
     $script:RefreshTimer.Dispose()
+    $script:ClockTimer.Dispose()
     $script:Mutex.ReleaseMutex()
     $script:Mutex.Dispose()
     if ($refreshStopped) { [void]$script:StoppedEvent.Set() }

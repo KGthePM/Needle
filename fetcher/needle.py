@@ -30,7 +30,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 TIMEOUT = 10
 
 
@@ -675,6 +675,18 @@ def self_update():
 
 # ----------------------------------------------------------------- main
 
+def next_refresh_at(provider, force=False):
+    """When a refresh (forced or not) will next call this provider's API instead of reusing it.
+
+    Cooldown counts from the last attempt, successful or not, so a 429 is never retried
+    right away. Errors with no data (e.g. a missing key) only wait the hard floor.
+    """
+    pid = provider["id"]
+    last_try = max(provider.get("fetched_at", 0), provider.get("attempted_at", 0))
+    floor = HARD_FLOOR.get(pid, 0) if (force or not provider.get("ok")) else COOLDOWN[pid]
+    return last_try + floor
+
+
 def snapshot(cfg, cache, cached_only=False, force=False):
     previous = {p["id"]: p for p in cache.get("providers", [])}
     now = time.time()
@@ -688,14 +700,9 @@ def snapshot(cfg, cache, cached_only=False, force=False):
             out.append(prev or {"id": pid, "name": name, "ok": False, "error": "No data yet. Press Refresh."})
             continue
 
-        # Cooldown counts from the last attempt, successful or not, so a 429 is never
-        # retried right away. Errors with no data (e.g. a missing key) only wait the hard floor.
-        if prev:
-            last_try = max(prev.get("fetched_at", 0), prev.get("attempted_at", 0))
-            floor = HARD_FLOOR.get(pid, 0) if (force or not prev.get("ok")) else COOLDOWN[pid]
-            if now - last_try < floor:
-                out.append(prev)
-                continue
+        if prev and now < next_refresh_at(prev, force):
+            out.append(prev)
+            continue
         try:
             result = {"id": pid, "name": name, "ok": True, "fetched_at": now, **fetch(pcfg)}
         except Exception as err:  # noqa: BLE001 - every failure becomes a readable message
@@ -714,6 +721,9 @@ def snapshot(cfg, cache, cached_only=False, force=False):
         # A service belongs in the usage view once it has produced usable data.
         # Cached data keeps it connected during temporary refresh failures.
         provider["connected"] = bool(provider.get("windows") or provider.get("balance"))
+        # Front ends show these so people know whether Refresh would change anything yet.
+        provider["refresh_at"] = next_refresh_at(provider)
+        provider["force_refresh_at"] = next_refresh_at(provider, force=True)
     return {"version": VERSION, "updated": now, "providers": out}
 
 
