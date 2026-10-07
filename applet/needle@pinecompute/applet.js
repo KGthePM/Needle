@@ -25,6 +25,8 @@ const STALE_ON_OPEN = 300;  // refresh on open if the snapshot is older than thi
 const TICK_SECONDS = 15;    // how often an open popup updates its "ago" and countdown text
 const PANEL_TAG = { claude: "C", codex: "G", zai: "Z" };
 const PACE_WINDOWS = ["5-hour", "Weekly"]; // windows that decide "how much can I use right now"
+const ALTERNATE_SECONDS = 4; // how long each window stays up when the panel alternates
+const ALTERNATE_TAG = { "5-hour": "5h", weekly: "Wk" };
 const THEME_MODES = [
     { id: "light", name: "Light" },
     { id: "system", name: "System" },
@@ -151,6 +153,17 @@ function bindingLeft(p) {
     return Math.min(...ws.map((w) => 100 - w.used));
 }
 
+// The "left" values the panel shows for one provider. A provider without the chosen
+// window (a plan with only a weekly limit) shows its tightest one instead.
+function shownLefts(p, mode) {
+    const ws = PACE_WINDOWS.map((label) => (p.windows || []).find((w) => w.label === label)).filter(Boolean);
+    if (!ws.length) return [];
+    const lefts = ws.map((w) => 100 - w.used);
+    if (mode === "both") return lefts;
+    const chosen = ws.find((w) => w.label === { "5-hour": "5-hour", weekly: "Weekly" }[mode]);
+    return [chosen ? 100 - chosen.used : Math.min(...lefts)];
+}
+
 // ------------------------------------------------------------------ applet
 
 class AIUsageApplet extends Applet.TextIconApplet {
@@ -172,6 +185,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this.settings = new Settings.AppletSettings(this, UUID, instanceId);
         this.settings.bind("refresh-minutes", "refreshMinutes", () => this._schedule());
         this.settings.bind("panel-style", "panelStyle", () => this._render());
+        this.settings.bind("panel-window", "panelWindow", () => this._render());
         this.settings.bind("show-remaining", "showRemaining", () => this._render());
         this.settings.bind("theme-mode", "themeMode", () => this._themeChanged());
         CUSTOM_COLORS.forEach((setting) => {
@@ -208,6 +222,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         if (this._timerId) GLib.source_remove(this._timerId);
         this._timerId = 0;
         this._setTicking(false);
+        this._setAlternating(null);
         if (this._dialog) this._dialog.close();
         this.settings.finalize();
     }
@@ -498,14 +513,52 @@ class AIUsageApplet extends Applet.TextIconApplet {
         );
     }
 
-    _renderPanel() {
-        const providers = this._shownProviders();
+    // One panel label: the text plus the worst level among the numbers it shows.
+    _panelText(providers, mode) {
         const parts = [];
-        const tips = [];
         let worst = "ok";
         const bump = (lvl) => {
             if (lvl === "crit" || (lvl === "warn" && worst === "ok")) worst = lvl;
         };
+        for (const p of providers) {
+            if (p.tally) continue; // Local AI isn't a limit, so it stays out of the panel label.
+            const lefts = shownLefts(p, mode);
+            if (lefts.length) {
+                const shown = lefts.map((left) => Math.round(this.showRemaining ? left : 100 - left));
+                parts.push(`${PANEL_TAG[p.id] || p.name[0]} ${shown.join("/")}%`);
+                bump(level(Math.min(...lefts)));
+            } else if (p.balance && p.balance.remaining !== null && p.balance.remaining !== undefined) {
+                parts.push(`$${Math.round(p.balance.remaining)}`);
+                if (p.balance.total) bump(level((100 * p.balance.remaining) / p.balance.total));
+            }
+        }
+        return { text: parts.join("   "), worst: worst };
+    }
+
+    _showPanelLabel(label) {
+        this.set_applet_label(label.text);
+        if (this._applet_label) {
+            this._applet_label.set_style(LEVEL_COLOR[label.worst] ? `color: ${LEVEL_COLOR[label.worst]};` : null);
+        }
+    }
+
+    // Swaps between the 5-hour and weekly labels every few seconds; null stops it.
+    _setAlternating(labels) {
+        if (this._altId) GLib.source_remove(this._altId);
+        this._altId = 0;
+        if (!labels) return;
+        let i = 0;
+        this._showPanelLabel(labels[i]);
+        this._altId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, ALTERNATE_SECONDS, () => {
+            i = (i + 1) % labels.length;
+            this._showPanelLabel(labels[i]);
+            return true;
+        });
+    }
+
+    _renderPanel() {
+        const providers = this._shownProviders();
+        const tips = [];
 
         for (const p of providers) {
             if (p.tally) {
@@ -513,12 +566,6 @@ class AIUsageApplet extends Applet.TextIconApplet {
                 const t = p.tally;
                 tips.push(`${p.name}\n  Today ${compact(t.today)}, this week ${compact(t.week)}, all time ${compact(t.all_time)}\n  Worth about ${money(t.est_cost)} at API prices (estimate)`);
             } else if (p.windows && p.windows.length) {
-                const left = bindingLeft(p);
-                if (left !== null) {
-                    const shown = this.showRemaining ? left : 100 - left;
-                    parts.push(`${PANEL_TAG[p.id] || p.name[0]} ${Math.round(shown)}%`);
-                    bump(level(left));
-                }
                 const lines = p.windows.map((w) => {
                     const v = this.showRemaining ? `${Math.round(100 - w.used)}% left` : `${Math.round(w.used)}% used`;
                     const r = w.resets_at ? `, resets in ${duration(w.resets_at - now())}` : "";
@@ -528,9 +575,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
             } else if (p.balance) {
                 const b = p.balance;
                 if (b.remaining !== null && b.remaining !== undefined) {
-                    parts.push(`$${Math.round(b.remaining)}`);
                     tips.push(`${p.name}\n  ${money(b.remaining)} left of ${money(b.total)}`);
-                    if (b.total) bump(level((100 * b.remaining) / b.total));
                 } else {
                     tips.push(`${p.name}\n  ${money(b.spent || 0)} spent, no limit`);
                 }
@@ -539,9 +584,19 @@ class AIUsageApplet extends Applet.TextIconApplet {
             }
         }
 
-        this.set_applet_label(this.panelStyle === "icon" ? "" : parts.join("   "));
-        if (this._applet_label) {
-            this._applet_label.set_style(LEVEL_COLOR[worst] ? `color: ${LEVEL_COLOR[worst]};` : null);
+        const mode = this.panelWindow || "tightest";
+        if (this.panelStyle === "icon") {
+            this._setAlternating(null);
+            this._showPanelLabel({ text: "", worst: "ok" });
+        // With nothing that has a 5-hour or weekly window, both labels would match, so show one.
+        } else if (mode === "alternate" && providers.some((p) => !p.tally && bindingLeft(p) !== null)) {
+            this._setAlternating(Object.keys(ALTERNATE_TAG).map((window) => {
+                const label = this._panelText(providers, window);
+                return { text: `${ALTERNATE_TAG[window]}  ${label.text}`, worst: label.worst };
+            }));
+        } else {
+            this._setAlternating(null);
+            this._showPanelLabel(this._panelText(providers, mode));
         }
         this.set_applet_tooltip(tips.length ? tips.join("\n\n") : this._fatal || "Needle");
         this._checkAlerts(providers);

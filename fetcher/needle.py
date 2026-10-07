@@ -11,6 +11,7 @@ plus a running count of the tokens you run on local models.
   needle --update   download the latest release and rerun the installer
   needle --check-updates  look for a new release now instead of waiting for the daily check
   needle --set-notify on|off  low-limit notifications on the Mac and Windows front ends
+  needle --set-mac-menu-bar-window MODE  tightest, 5-hour, weekly, both or alternate
 
 Standard library only. Works on Linux, macOS and Windows.
 """
@@ -35,7 +36,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.7.3"
+VERSION = "1.8.0"
 TIMEOUT = 10
 
 
@@ -827,6 +828,7 @@ PROVIDER_IDS = {provider[0] for provider in PROVIDERS}
 KEY_PROVIDERS = {"zai", "openrouter"}
 DEFAULT_ON = {"local"}  # reads local files only, so it needs no setup
 TRAY_HOVER_PERCENTAGE_MODES = {"hourly", "weekly", "both"}
+MAC_MENU_BAR_WINDOWS = {"tightest", "5-hour", "weekly", "both", "alternate"}
 WINDOWS_THEME_MODES = {"light", "system", "dark", "night", "custom"}
 WINDOWS_THEME_COLOR_ROLES = {
     "background",
@@ -903,6 +905,19 @@ def configure_notify(value):
     write_json(CONFIG_PATH, cfg)
 
 
+def configure_mac_menu_bar_window(mode):
+    """Which limit the Mac menu bar shows for each service."""
+    if mode not in MAC_MENU_BAR_WINDOWS:
+        raise ValueError(f"Unknown menu bar window: {mode}")
+    cfg = load_config_for_update()
+    section = cfg.get("mac")
+    if not isinstance(section, dict):
+        section = {}
+        cfg["mac"] = section
+    section["menu_bar_window"] = mode
+    write_json(CONFIG_PATH, cfg)
+
+
 def configure_windows_theme(mode):
     if mode not in WINDOWS_THEME_MODES:
         raise ValueError(f"Unknown Windows theme: {mode}")
@@ -952,6 +967,7 @@ def run_config_command(argv):
         "--set-windows-theme": "windows-theme",
         "--set-windows-custom-theme": "windows-custom-theme",
         "--set-notify": "notify",
+        "--set-mac-menu-bar-window": "mac-menu-bar-window",
     }
     selected = [(flag, action) for flag, action in commands.items() if flag in argv]
     if not selected:
@@ -966,7 +982,7 @@ def run_config_command(argv):
             index = argv.index(flag)
             value = argv[index + 1]
         except IndexError:
-            argument = "a mode" if action in {"tray-hover-percentage-mode", "windows-theme"} \
+            argument = "a mode" if action in {"tray-hover-percentage-mode", "windows-theme", "mac-menu-bar-window"} \
                 else "on or off" if action == "notify" else "a service id"
             print(f"{flag} requires {argument}.", file=sys.stderr)
             return 2
@@ -983,6 +999,8 @@ def run_config_command(argv):
             configure_windows_theme(value)
         elif action == "notify":
             configure_notify(value)
+        elif action == "mac-menu-bar-window":
+            configure_mac_menu_bar_window(value)
         elif action == "windows-custom-theme":
             try:
                 palette = json.loads(sys.stdin.read())

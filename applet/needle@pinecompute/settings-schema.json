@@ -16,6 +16,19 @@
     "options": { "Percentages": "compact", "Icon only": "icon" },
     "description": "Show in panel"
   },
+  "panel-window": {
+    "type": "combobox",
+    "default": "tightest",
+    "options": {
+      "Tightest limit": "tightest",
+      "5-hour": "5-hour",
+      "Weekly": "weekly",
+      "Both (5-hour/weekly)": "both",
+      "Alternate 5-hour and weekly": "alternate"
+    },
+    "description": "Percentages show",
+    "tooltip": "Tightest shows whichever of the 5-hour and weekly limits has less left. Services without the chosen window show their tightest one."
+  },
   "show-remaining": {
     "type": "switch",
     "default": true,

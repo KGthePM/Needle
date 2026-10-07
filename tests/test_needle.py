@@ -679,6 +679,26 @@ class NotifySettingTests(unittest.TestCase):
             self.assertFalse(config.exists())
 
 
+class MacMenuBarWindowSettingTests(unittest.TestCase):
+    def test_set_mac_menu_bar_window_updates_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "config.json"
+            config.write_text(json.dumps({"windows": {"theme": "dark"}}), encoding="utf-8")
+            with mock.patch.object(needle, "CONFIG_PATH", config):
+                self.assertEqual(needle.run_config_command(["--set-mac-menu-bar-window", "alternate"]), 0)
+                saved = json.loads(config.read_text())
+        self.assertEqual(saved["mac"], {"menu_bar_window": "alternate"})
+        self.assertEqual(saved["windows"], {"theme": "dark"})
+
+    def test_set_mac_menu_bar_window_rejects_unknown_modes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "config.json"
+            with mock.patch.object(needle, "CONFIG_PATH", config), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(needle.run_config_command(["--set-mac-menu-bar-window", "monthly"]), 2)
+                self.assertEqual(needle.run_config_command(["--set-mac-menu-bar-window"]), 2)
+            self.assertFalse(config.exists())
+
+
 class MacAlertTests(unittest.TestCase):
     def setUp(self):
         spec = importlib.util.spec_from_file_location("needle_mac", ROOT / "mac" / "needle.5m.py")
@@ -716,6 +736,46 @@ class MacAlertTests(unittest.TestCase):
         title = out.getvalue().splitlines()[0]
         self.assertIn("C 58%", title)
         self.assertNotIn("412", title)
+
+    def titles(self, providers, mode):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.mac.render_title(providers, mode)
+        return out.getvalue().splitlines()
+
+    def both_windows(self):
+        return [{"id": "claude", "name": "Claude",
+                 "windows": [{"label": "5-hour", "used": 8}, {"label": "Weekly", "used": 59}]},
+                {"id": "openrouter", "name": "OpenRouter", "balance": {"remaining": 14, "total": 20}}]
+
+    def test_menu_bar_shows_the_chosen_window(self):
+        providers = self.both_windows()
+        self.assertTrue(self.titles(providers, "tightest")[0].startswith("C 41%  $14 |"))
+        self.assertTrue(self.titles(providers, "5-hour")[0].startswith("C 92%  $14 |"))
+        self.assertTrue(self.titles(providers, "weekly")[0].startswith("C 41%  $14 |"))
+        self.assertTrue(self.titles(providers, "both")[0].startswith("C 92/41%  $14 |"))
+
+    def test_alternate_prints_one_title_line_per_window(self):
+        lines = self.titles(self.both_windows(), "alternate")
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("5h  C 92%  $14 |"))
+        self.assertTrue(lines[1].startswith("Wk  C 41%  $14 |"))
+        # The icon follows the tightest limit on both lines.
+        self.assertTrue(all("gauge.with.dots.needle.50percent" in line for line in lines))
+
+    def test_alternate_with_no_windows_prints_one_line(self):
+        balance_only = self.both_windows()[1:]
+        self.assertEqual(len(self.titles(balance_only, "alternate")), 1)
+
+    def test_missing_window_falls_back_to_tightest(self):
+        weekly_only = [{"id": "claude", "name": "Claude", "windows": [{"label": "Weekly", "used": 30}]}]
+        self.assertTrue(self.titles(weekly_only, "5-hour")[0].startswith("C 70% |"))
+        self.assertTrue(self.titles(weekly_only, "both")[0].startswith("C 70% |"))
+
+    def test_menu_bar_window_setting_defaults_to_tightest(self):
+        self.assertEqual(self.mac.menu_bar_window({}), "tightest")
+        self.assertEqual(self.mac.menu_bar_window({"mac": {"menu_bar_window": "bogus"}}), "tightest")
+        self.assertEqual(self.mac.menu_bar_window({"mac": {"menu_bar_window": "weekly"}}), "weekly")
 
 class UpdateTests(unittest.TestCase):
     RELEASE = {"latest": "99.0.0", "url": "https://example.test/r", "notes": "New", "zipball": "z"}

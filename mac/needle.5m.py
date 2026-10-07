@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.7.3</xbar.version>
+# <xbar.version>v1.8.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance, plus a count of your local AI tokens.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -56,6 +56,16 @@ INK = {"ok": 32, "warn": 33, "crit": 31, "dim": None}  # green, yellow, red, def
 DOT = {"claude": "🟠", "codex": "⚫", "zai": "🔵", "openrouter": "🟣", "local": "🟢"}
 PANEL_TAG = {"claude": "C", "codex": "G", "zai": "Z"}
 PACE_WINDOWS = ("5-hour", "Weekly")
+# Settings > Menu bar shows. SwiftBar cycles through title lines on its own, so
+# "alternate" just prints one line per window.
+MENU_BAR_WINDOWS = (
+    ("tightest", "Tightest limit"),
+    ("5-hour", "5-hour"),
+    ("weekly", "Weekly"),
+    ("both", "Both (5-hour/weekly)"),
+    ("alternate", "Alternate 5-hour and weekly"),
+)
+ALTERNATE_TAG = {"5-hour": "5h", "weekly": "Wk"}
 PACE = {"fast": ("▲ fast", "warn"), "even": ("● on pace", "dim"), "slow": ("▼ plenty", "ok")}
 CELLS = 16
 
@@ -159,6 +169,18 @@ def binding_left(p):
     return min(100 - w["used"] for w in ws) if ws else None
 
 
+def shown_lefts(p, mode):
+    """The "left" values the menu bar shows for one provider. A provider without the
+    chosen window (a plan with only a weekly limit) shows its tightest one instead."""
+    pace = {w["label"]: 100 - w["used"] for w in p.get("windows", []) if w["label"] in PACE_WINDOWS}
+    if not pace:
+        return []
+    if mode == "both":
+        return [pace[label] for label in PACE_WINDOWS if label in pace]
+    label = {"5-hour": "5-hour", "weekly": "Weekly"}.get(mode)
+    return [pace.get(label, min(pace.values()))]
+
+
 # ------------------------------------------------------------------ data
 
 def load():
@@ -208,15 +230,41 @@ def provider_connected(provider):
 
 # ------------------------------------------------------------------ rendering
 
-def render_title(providers):
-    parts, lefts = [], []
+def menu_bar_window(config):
+    section = config.get("mac")
+    mode = section.get("menu_bar_window") if isinstance(section, dict) else None
+    return mode if mode in dict(MENU_BAR_WINDOWS) else "tightest"
+
+
+def render_title(providers, mode="tightest"):
+    # The icon's needle always follows the tightest limit, whichever window the text shows.
+    lowest = min(filter(lambda left: left is not None, map(tightest_left, providers)), default=None)
+    # With nothing that has a 5-hour or weekly window, both lines would match, so show one.
+    if mode == "alternate" and any(binding_left(p) is not None for p in providers):
+        for window, tag in ALTERNATE_TAG.items():
+            item(f"{tag}  {title_text(providers, window)}", sfimage=gauge_symbol(lowest), ansi=True)
+        return
+    item(title_text(providers, mode), sfimage=gauge_symbol(lowest), ansi=True)
+
+
+def tightest_left(p):
+    """A provider's tightest limit, or its credit balance as a percentage of the total."""
+    left = binding_left(p)
+    b = p.get("balance")
+    if left is None and not p.get("tally") and b and b.get("remaining") is not None and b.get("total"):
+        left = 100 * b["remaining"] / b["total"]
+    return left
+
+
+def title_text(providers, mode):
+    parts = []
     for p in providers:
-        left = binding_left(p)
+        lefts = shown_lefts(p, mode)
         # Each provider is colored on its own, so one low limit doesn't turn the whole title red.
-        if left is not None:
-            text = f"{PANEL_TAG.get(p['id'], p['name'][0])} {round(left)}%"
-            parts.append(paint(text, level(left)) if level(left) != "ok" else text)
-            lefts.append(left)
+        if lefts:
+            worst = min(lefts)
+            text = f"{PANEL_TAG.get(p['id'], p['name'][0])} {'/'.join(str(round(left)) for left in lefts)}%"
+            parts.append(paint(text, level(worst)) if level(worst) != "ok" else text)
         elif p.get("tally"):
             pass  # Local AI isn't a limit, so it stays out of the title; it has its own card.
         elif p.get("balance") and p["balance"].get("remaining") is not None:
@@ -224,11 +272,9 @@ def render_title(providers):
             text = f"${round(b['remaining'])}"
             if b.get("total"):
                 pct = 100 * b["remaining"] / b["total"]
-                lefts.append(pct)
                 text = paint(text, level(pct)) if level(pct) != "ok" else text
             parts.append(text)
-    lowest = min(lefts, default=None)
-    item("  ".join(parts) or "AI", sfimage=gauge_symbol(lowest), ansi=True)
+    return "  ".join(parts) or "AI"
 
 
 def gauge_symbol(left):
@@ -423,7 +469,13 @@ def render_settings(data, enabled, stored_keys):
         status = update_status(data)
         if status:
             item(f"--{status}", **SMALL)
-    notify_on = notifications_on(load_config())
+    config = load_config()
+    item("--Menu bar shows")
+    current = menu_bar_window(config)
+    for mode, name in MENU_BAR_WINDOWS:
+        item(f"----{name}", checked=mode == current, bash=PY, param1=str(FETCHER),
+             param2="--set-mac-menu-bar-window", param3=mode, terminal=False, refresh=True)
+    notify_on = notifications_on(config)
     item("--Notify when a limit runs low", checked=notify_on, bash=PY, param1=str(FETCHER),
          param2="--set-notify", param3="off" if notify_on else "on", terminal=False, refresh=True)
     item("--Open raw config", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
@@ -590,7 +642,7 @@ def main():
                  if isinstance(p, dict) and (p.get("id") in enabled or p.get("id") == "local")
                  and provider_connected(p)]
     connected = {p["id"] for p in providers if p["id"] != "local"}
-    render_title(providers)
+    render_title(providers, menu_bar_window(config))
     sep()
     if data:
         check_alerts(providers, config)
