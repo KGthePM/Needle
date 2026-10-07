@@ -138,7 +138,7 @@ class CredentialTests(unittest.TestCase):
                 mock.patch.object(needle, "refresh_claude_sign_in", return_value=True) as refresh, \
                 mock.patch.object(needle, "http_get", return_value=usage) as get:
             result = needle.fetch_claude({})
-        refresh.assert_called_once_with()
+        refresh.assert_called_once_with({})
         self.assertEqual(get.call_args[0][1]["Authorization"], "Bearer fresh")
         self.assertEqual(result["windows"][0]["used"], 7.0)
 
@@ -176,8 +176,10 @@ class CredentialTests(unittest.TestCase):
         env = {"PATH": "/usr/bin", "USER": "kyle", "CLAUDE_CODE_OAUTH_TOKEN": "parent", "ANTHROPIC_API_KEY": "key"}
         with mock.patch.dict(needle.os.environ, env, clear=True), \
                 mock.patch.object(needle, "claude_cli", return_value="/bin/claude"), \
+                mock.patch.object(needle, "latest_claude_expiry", return_value=None), \
+                mock.patch.object(needle, "write_json"), \
                 mock.patch.object(needle.subprocess, "run") as run:
-            self.assertTrue(needle.refresh_claude_sign_in())
+            self.assertTrue(needle.refresh_claude_sign_in({}))
         args, kwargs = run.call_args
         self.assertEqual(args[0], ["/bin/claude", "auth", "status"])
         self.assertEqual(kwargs["env"], {"PATH": "/usr/bin", "USER": "kyle"})
@@ -186,15 +188,60 @@ class CredentialTests(unittest.TestCase):
         with mock.patch.dict(needle.os.environ, {"PATH": "/usr/bin"}, clear=True), \
                 mock.patch.object(needle, "claude_cli", return_value="/bin/claude"), \
                 mock.patch.object(needle.getpass, "getuser", return_value="kyle"), \
+                mock.patch.object(needle, "latest_claude_expiry", return_value=None), \
+                mock.patch.object(needle, "write_json"), \
                 mock.patch.object(needle.subprocess, "run") as run:
-            needle.refresh_claude_sign_in()
+            needle.refresh_claude_sign_in({})
         self.assertEqual(run.call_args[1]["env"]["USER"], "kyle")
 
     def test_refresh_skipped_without_claude_cli(self):
         with mock.patch.object(needle, "claude_cli", return_value=None), \
                 mock.patch.object(needle.subprocess, "run") as run:
-            self.assertFalse(needle.refresh_claude_sign_in())
+            self.assertFalse(needle.refresh_claude_sign_in({}))
         run.assert_not_called()
+
+    def test_refresh_that_does_not_renew_says_needle_will_retry(self):
+        expired = needle.SignInExpired("Sign-in expired.")
+        with mock.patch.object(needle, "claude_credentials", side_effect=[expired, expired]), \
+                mock.patch.object(needle, "refresh_claude_sign_in", return_value=True):
+            with self.assertRaises(needle.SignInExpired) as caught:
+                needle.fetch_claude({})
+        self.assertEqual(str(caught.exception), needle.RETRY_EXPIRED)
+
+    def test_refresh_rejected_again_says_needle_will_retry(self):
+        rejected = needle.urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
+        with mock.patch.object(needle, "claude_credentials", return_value=[("token", "max")]), \
+                mock.patch.object(needle, "refresh_claude_sign_in", return_value=True), \
+                mock.patch.object(needle, "http_get", side_effect=rejected):
+            with self.assertRaises(needle.SignInExpired) as caught:
+                needle.fetch_claude({})
+        self.assertEqual(str(caught.exception), needle.RETRY_EXPIRED)
+
+    def test_refresh_records_whether_sign_in_was_renewed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            record = Path(temp) / "claude-refresh.json"
+            with mock.patch.object(needle, "claude_cli", return_value="/bin/claude"), \
+                    mock.patch.object(needle, "claude_refresh_path", return_value=record), \
+                    mock.patch.object(needle, "latest_claude_expiry", side_effect=[100.0, 5000.0]), \
+                    mock.patch.object(needle.subprocess, "run", return_value=mock.Mock(returncode=0)):
+                needle.refresh_claude_sign_in({})
+            data = json.loads(record.read_text())
+        self.assertEqual(data["exit_code"], 0)
+        self.assertTrue(data["renewed"])
+        self.assertEqual((data["expires_before"], data["expires_after"]), (100.0, 5000.0))
+
+    def test_refresh_records_a_refresh_that_did_not_renew(self):
+        with tempfile.TemporaryDirectory() as temp:
+            record = Path(temp) / "claude-refresh.json"
+            with mock.patch.object(needle, "claude_cli", return_value="/bin/claude"), \
+                    mock.patch.object(needle, "claude_refresh_path", return_value=record), \
+                    mock.patch.object(needle, "latest_claude_expiry", side_effect=[100.0, 100.0]), \
+                    mock.patch.object(needle.subprocess, "run",
+                                      side_effect=needle.subprocess.TimeoutExpired("claude", 30)):
+                self.assertTrue(needle.refresh_claude_sign_in({}))
+            data = json.loads(record.read_text())
+        self.assertEqual(data["exit_code"], "TimeoutExpired")
+        self.assertFalse(data["renewed"])
 
     def test_claude_cli_found_outside_short_path(self):
         with tempfile.TemporaryDirectory() as temp:

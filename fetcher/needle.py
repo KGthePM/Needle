@@ -36,7 +36,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.8.2"
+VERSION = "1.8.3"
 TIMEOUT = 10
 
 
@@ -190,8 +190,8 @@ def claude_keychain():
     return None
 
 
-def claude_credentials(cfg):
-    """Unexpired Claude sign-ins as (token, plan) pairs, latest expiry first."""
+def claude_oauths(cfg):
+    """Every Claude plan sign-in Needle can find, expired or not."""
     path = Path(cfg.get("credentials_path", "~/.claude/.credentials.json")).expanduser()
     found = [load_json(path, None) if path.exists() else None]
     if sys.platform == "darwin":
@@ -206,12 +206,25 @@ def claude_credentials(cfg):
     oauths = [oauth for oauth in oauths if isinstance(oauth, dict) and oauth.get("accessToken")]
     if not oauths:
         raise ProviderError("No plan sign-in found. Claude Code may be using an API key.")
+    return oauths
 
-    def expiry(oauth):
-        expires = parse_ts(oauth.get("expiresAt"))
-        return float("inf") if expires is None else expires
 
-    live = sorted((o for o in oauths if expiry(o) >= time.time()), key=expiry, reverse=True)
+def claude_expiry(oauth):
+    expires = parse_ts(oauth.get("expiresAt"))
+    return float("inf") if expires is None else expires
+
+
+def latest_claude_expiry(cfg):
+    try:
+        return max(claude_expiry(oauth) for oauth in claude_oauths(cfg))
+    except ProviderError:
+        return None
+
+
+def claude_credentials(cfg):
+    """Unexpired Claude sign-ins as (token, plan) pairs, latest expiry first."""
+    live = sorted((o for o in claude_oauths(cfg) if claude_expiry(o) >= time.time()),
+                  key=claude_expiry, reverse=True)
     if not live:
         raise SignInExpired("Sign-in expired. Run `claude` in a terminal once to refresh it.")
     pairs = []
@@ -222,6 +235,7 @@ def claude_credentials(cfg):
     return pairs
 
 
+RETRY_EXPIRED = "Sign-in expired. Needle will try again shortly, or run `claude` in a terminal."
 CLAUDE_BIN_DIRS = ("~/.local/bin", "~/.claude/local", "/opt/homebrew/bin", "/usr/local/bin")
 
 
@@ -237,8 +251,16 @@ def claude_cli():
     return None
 
 
-def refresh_claude_sign_in():
-    """Have Claude Code refresh its own sign-in. Needle itself never refreshes or writes it."""
+def claude_refresh_path():
+    return CACHE_PATH.with_name("claude-refresh.json")
+
+
+def refresh_claude_sign_in(cfg):
+    """Have Claude Code refresh its own sign-in. Needle itself never refreshes or writes it.
+
+    Each attempt is recorded in claude-refresh.json next to the cache, so a failed
+    refresh can be explained later without --debug.
+    """
     cli = claude_cli()
     if not cli:
         return False
@@ -251,12 +273,23 @@ def refresh_claude_sign_in():
             env["USER"] = getpass.getuser()
         except (KeyError, OSError):
             pass
+    before = latest_claude_expiry(cfg)
     try:
-        subprocess.run([cli, "auth", "status"], capture_output=True, text=True,
-                       timeout=30, env=env, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    log("--- ran claude auth status to refresh the sign-in")
+        exit_code = subprocess.run([cli, "auth", "status"], capture_output=True, text=True,
+                                   timeout=30, env=env, stdin=subprocess.DEVNULL).returncode
+    except (OSError, subprocess.SubprocessError) as err:
+        exit_code = type(err).__name__
+    after = latest_claude_expiry(cfg)
+    renewed = after is not None and (before is None or after > before)
+    record = {"at": time.time(), "exit_code": exit_code, "renewed": renewed,
+              # A sign-in with no expiry counts as never expiring; JSON has no infinity.
+              "expires_before": None if before == float("inf") else before,
+              "expires_after": None if after == float("inf") else after}
+    try:
+        write_json(claude_refresh_path(), record)
+    except OSError:
+        pass
+    log(f"--- ran claude auth status to refresh the sign-in: {record}")
     return True
 
 
@@ -280,9 +313,16 @@ def fetch_claude(cfg):
     except (SignInExpired, urllib.error.HTTPError) as err:
         if isinstance(err, urllib.error.HTTPError) and err.code != 401:
             raise
-        if not refresh_claude_sign_in():
+        if not refresh_claude_sign_in(cfg):
             raise
-        data, plan = claude_usage(cfg, claude_credentials(cfg))
+        try:
+            data, plan = claude_usage(cfg, claude_credentials(cfg))
+        except (SignInExpired, urllib.error.HTTPError) as retry_err:
+            if isinstance(retry_err, urllib.error.HTTPError) and retry_err.code != 401:
+                raise
+            # Claude Code ran but couldn't refresh, often because the network isn't up
+            # yet after waking. The next refresh asks it again.
+            raise SignInExpired(RETRY_EXPIRED) from retry_err
     spec = [("five_hour", "5-hour", FIVE_HOURS), ("seven_day", "Weekly", ONE_WEEK)]
     if cfg.get("show_model_windows"):
         spec += [("seven_day_opus", "Weekly Opus", ONE_WEEK), ("seven_day_sonnet", "Weekly Sonnet", ONE_WEEK)]
