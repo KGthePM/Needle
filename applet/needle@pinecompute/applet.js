@@ -21,6 +21,9 @@ const CONFIG = GLib.getenv("NEEDLE_CONFIG") || GLib.build_filenamev([GLib.get_us
 
 const BAR_W = 300;          // must match .aiu-track width in stylesheet.css
 const BAR_H = 6;
+// The System theme has no muted text color of its own, so dim text fades instead.
+// The other themes color it with a readable muted color and need no fading on top.
+const SYSTEM_DIM_OPACITY = 190;
 const STALE_ON_OPEN = 300;  // refresh on open if the snapshot is older than this (s)
 const TICK_SECONDS = 15;    // how often an open popup updates its "ago" and countdown text
 const PANEL_TAG = { claude: "C", codex: "G", zai: "Z" };
@@ -149,7 +152,10 @@ function uiScale() {
 
 function label(text, style, dim) {
     const l = new St.Label({ text: text, style_class: style || "" });
-    if (dim) l.opacity = 150;
+    if (dim) {
+        l._dim = true;
+        l.opacity = SYSTEM_DIM_OPACITY; // _applyTheme lifts this for themes with a muted color
+    }
     return l;
 }
 
@@ -908,6 +914,12 @@ class AIUsageApplet extends Applet.TextIconApplet {
         const mode = THEME_MODES.some((item) => item.id === this.themeMode) ? this.themeMode : "system";
         this._wrap.set_style_class_name(`aiu-wrap${mode === "system" ? "" : ` aiu-theme-${mode}`}`);
         this._wrap.set_style(null);
+        const dimOpacity = mode === "system" ? SYSTEM_DIM_OPACITY : 255;
+        const undim = (actor) => {
+            if (actor._dim) actor.opacity = dimOpacity;
+            actor.get_children().forEach(undim);
+        };
+        undim(this._wrap);
         if (mode !== "custom") return;
 
         const palette = this._customPalette();

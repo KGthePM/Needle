@@ -36,7 +36,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 TIMEOUT = 10
 
 
