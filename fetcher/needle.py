@@ -16,9 +16,11 @@ Standard library only. Works on Linux, macOS and Windows.
 """
 import base64
 import binascii
+import getpass
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -69,6 +71,10 @@ DEBUG = False
 
 class ProviderError(Exception):
     pass
+
+
+class SignInExpired(ProviderError):
+    """Every sign-in Needle found has expired."""
 
 
 class ResponseError(ProviderError):
@@ -206,7 +212,7 @@ def claude_credentials(cfg):
 
     live = sorted((o for o in oauths if expiry(o) >= time.time()), key=expiry, reverse=True)
     if not live:
-        raise ProviderError("Sign-in expired. Run `claude` in a terminal once to refresh it.")
+        raise SignInExpired("Sign-in expired. Run `claude` in a terminal once to refresh it.")
     pairs = []
     for oauth in live:
         pair = (oauth["accessToken"], oauth.get("subscriptionType"))
@@ -215,20 +221,67 @@ def claude_credentials(cfg):
     return pairs
 
 
-def fetch_claude(cfg):
-    sign_ins = claude_credentials(cfg)
+CLAUDE_BIN_DIRS = ("~/.local/bin", "~/.claude/local", "/opt/homebrew/bin", "/usr/local/bin")
+
+
+def claude_cli():
+    """Path to the claude command. Menu bar apps get a short PATH, so check the usual spots."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for directory in CLAUDE_BIN_DIRS:
+        path = Path(directory).expanduser() / "claude"
+        if os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+
+def refresh_claude_sign_in():
+    """Have Claude Code refresh its own sign-in. Needle itself never refreshes or writes it."""
+    cli = claude_cli()
+    if not cli:
+        return False
+    # Drop sign-ins handed down by a parent app so claude checks its own stored one.
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    # Claude Code finds its Keychain item by user name and reports signed out without it.
+    if not env.get("USER"):
+        try:
+            env["USER"] = getpass.getuser()
+        except (KeyError, OSError):
+            pass
+    try:
+        subprocess.run([cli, "auth", "status"], capture_output=True, text=True,
+                       timeout=30, env=env, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    log("--- ran claude auth status to refresh the sign-in")
+    return True
+
+
+def claude_usage(cfg, sign_ins):
     for i, (token, plan) in enumerate(sign_ins):
         try:
-            data = http_get("https://api.anthropic.com/api/oauth/usage", {
+            return http_get("https://api.anthropic.com/api/oauth/usage", {
                 "Authorization": f"Bearer {token}",
                 "anthropic-beta": "oauth-2025-04-20",
                 "User-Agent": cfg.get("user_agent", f"needle/{VERSION}"),
-            })
-            break
+            }), plan
         except urllib.error.HTTPError as err:
             # A rejected sign-in may just be stale; try the next one before giving up.
             if err.code != 401 or i == len(sign_ins) - 1:
                 raise
+
+
+def fetch_claude(cfg):
+    try:
+        data, plan = claude_usage(cfg, claude_credentials(cfg))
+    except (SignInExpired, urllib.error.HTTPError) as err:
+        if isinstance(err, urllib.error.HTTPError) and err.code != 401:
+            raise
+        if not refresh_claude_sign_in():
+            raise
+        data, plan = claude_usage(cfg, claude_credentials(cfg))
     spec = [("five_hour", "5-hour", FIVE_HOURS), ("seven_day", "Weekly", ONE_WEEK)]
     if cfg.get("show_model_windows"):
         spec += [("seven_day_opus", "Weekly Opus", ONE_WEEK), ("seven_day_sonnet", "Weekly Sonnet", ONE_WEEK)]

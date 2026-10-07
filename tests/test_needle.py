@@ -131,6 +131,80 @@ class CredentialTests(unittest.TestCase):
         self.assertEqual(used, ["Bearer first", "Bearer second"])
         self.assertEqual(result["plan"], "Pro")
 
+    def test_expired_claude_sign_in_asks_claude_code_to_refresh(self):
+        expired = needle.SignInExpired("Sign-in expired.")
+        usage = {"five_hour": {"utilization": 7, "resets_at": None}}
+        with mock.patch.object(needle, "claude_credentials", side_effect=[expired, [("fresh", "max")]]), \
+                mock.patch.object(needle, "refresh_claude_sign_in", return_value=True) as refresh, \
+                mock.patch.object(needle, "http_get", return_value=usage) as get:
+            result = needle.fetch_claude({})
+        refresh.assert_called_once_with()
+        self.assertEqual(get.call_args[0][1]["Authorization"], "Bearer fresh")
+        self.assertEqual(result["windows"][0]["used"], 7.0)
+
+    def test_expired_claude_sign_in_without_claude_cli_keeps_error(self):
+        with mock.patch.object(needle, "claude_credentials", side_effect=needle.SignInExpired("Sign-in expired.")), \
+                mock.patch.object(needle, "refresh_claude_sign_in", return_value=False):
+            with self.assertRaises(needle.SignInExpired):
+                needle.fetch_claude({})
+
+    def test_rejected_claude_sign_in_refreshes_and_retries(self):
+        calls = []
+
+        def fake_get(url, headers):
+            calls.append(headers["Authorization"])
+            if headers["Authorization"] == "Bearer old":
+                raise needle.urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+            return {"seven_day": {"utilization": 30, "resets_at": None}}
+
+        with mock.patch.object(needle, "claude_credentials", side_effect=[[("old", "max")], [("new", "max")]]), \
+                mock.patch.object(needle, "refresh_claude_sign_in", return_value=True), \
+                mock.patch.object(needle, "http_get", side_effect=fake_get):
+            needle.fetch_claude({})
+        self.assertEqual(calls, ["Bearer old", "Bearer new"])
+
+    def test_claude_server_errors_do_not_trigger_refresh(self):
+        error = needle.urllib.error.HTTPError("u", 500, "Server error", {}, None)
+        with mock.patch.object(needle, "claude_credentials", return_value=[("token", "max")]), \
+                mock.patch.object(needle, "refresh_claude_sign_in") as refresh, \
+                mock.patch.object(needle, "http_get", side_effect=error):
+            with self.assertRaises(needle.urllib.error.HTTPError):
+                needle.fetch_claude({})
+        refresh.assert_not_called()
+
+    def test_refresh_runs_auth_status_without_inherited_tokens(self):
+        env = {"PATH": "/usr/bin", "USER": "kyle", "CLAUDE_CODE_OAUTH_TOKEN": "parent", "ANTHROPIC_API_KEY": "key"}
+        with mock.patch.dict(needle.os.environ, env, clear=True), \
+                mock.patch.object(needle, "claude_cli", return_value="/bin/claude"), \
+                mock.patch.object(needle.subprocess, "run") as run:
+            self.assertTrue(needle.refresh_claude_sign_in())
+        args, kwargs = run.call_args
+        self.assertEqual(args[0], ["/bin/claude", "auth", "status"])
+        self.assertEqual(kwargs["env"], {"PATH": "/usr/bin", "USER": "kyle"})
+
+    def test_refresh_fills_missing_user(self):
+        with mock.patch.dict(needle.os.environ, {"PATH": "/usr/bin"}, clear=True), \
+                mock.patch.object(needle, "claude_cli", return_value="/bin/claude"), \
+                mock.patch.object(needle.getpass, "getuser", return_value="kyle"), \
+                mock.patch.object(needle.subprocess, "run") as run:
+            needle.refresh_claude_sign_in()
+        self.assertEqual(run.call_args[1]["env"]["USER"], "kyle")
+
+    def test_refresh_skipped_without_claude_cli(self):
+        with mock.patch.object(needle, "claude_cli", return_value=None), \
+                mock.patch.object(needle.subprocess, "run") as run:
+            self.assertFalse(needle.refresh_claude_sign_in())
+        run.assert_not_called()
+
+    def test_claude_cli_found_outside_short_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cli = Path(temp) / "claude"
+            cli.write_text("#!/bin/sh\n")
+            cli.chmod(0o755)
+            with mock.patch.object(needle.shutil, "which", return_value=None), \
+                    mock.patch.object(needle, "CLAUDE_BIN_DIRS", (temp,)):
+                self.assertEqual(needle.claude_cli(), str(cli))
+
     def test_account_id_claim_variants(self):
         self.assertEqual(needle.account_from_claims({"chatgpt_account_id": "direct"}), "direct")
         self.assertEqual(
