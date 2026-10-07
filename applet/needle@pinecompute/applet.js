@@ -27,6 +27,13 @@ const PANEL_TAG = { claude: "C", codex: "G", zai: "Z" };
 const PACE_WINDOWS = ["5-hour", "Weekly"]; // windows that decide "how much can I use right now"
 const ALTERNATE_SECONDS = 4; // how long each window stays up when the panel alternates
 const ALTERNATE_TAG = { "5-hour": "5h", weekly: "Wk" };
+const PANEL_WINDOWS = [ // ids match the panel-window choices in settings-schema.json
+    { id: "tightest", name: "Tightest limit" },
+    { id: "5-hour", name: "5-hour" },
+    { id: "weekly", name: "Weekly" },
+    { id: "both", name: "Both (5-hour/weekly)" },
+    { id: "alternate", name: "Alternate 5-hour and weekly" },
+];
 const THEME_MODES = [
     { id: "light", name: "Light" },
     { id: "system", name: "System" },
@@ -659,6 +666,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         if (this._view === "add") this._renderAddView();
         else if (this._view === "settings") this._renderSettingsView();
         else if (this._view === "theme") this._renderThemeView();
+        else if (this._view === "panel-window") this._renderPanelWindowView();
         else this._renderUsageView();
         this._applyTheme();
     }
@@ -794,6 +802,11 @@ class AIUsageApplet extends Applet.TextIconApplet {
             this.panelStyle = this.panelStyle === "icon" ? "compact" : "icon";
             this._render();
         });
+        const window = PANEL_WINDOWS.find((item) => item.id === this.panelWindow) || PANEL_WINDOWS[0];
+        this._settingRow("Percentages show", window.name, () => {
+            this._view = "panel-window";
+            this._renderMenu();
+        });
         this._settingRow("Usage values", this.showRemaining ? "Remaining" : "Used", () => {
             this.showRemaining = !this.showRemaining;
             this._render();
@@ -835,6 +848,22 @@ class AIUsageApplet extends Applet.TextIconApplet {
         });
         this._content.add(label("CUSTOM", "aiu-section-label", true));
         this._settingRow("Edit custom palette", "", () => this._openThemeSettings());
+    }
+
+    _renderPanelWindowView() {
+        this._header("Percentages show", "settings");
+        this._content.add(label("PANEL", "aiu-section-label", true));
+        const current = PANEL_WINDOWS.some((item) => item.id === this.panelWindow) ? this.panelWindow : "tightest";
+        PANEL_WINDOWS.forEach((choice) => {
+            const selected = current === choice.id;
+            const row = this._settingRow(choice.name, selected ? "Selected" : "", () => {
+                this.panelWindow = choice.id;
+                this._render();
+            });
+            row.add_style_class_name("aiu-theme-choice");
+            if (selected) row.add_style_class_name("aiu-theme-choice-selected");
+        });
+        this._content.add(this._note("Tightest shows whichever of the 5-hour and weekly limits has less left."));
     }
 
     _themeChanged() {
