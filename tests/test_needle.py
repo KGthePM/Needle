@@ -67,6 +67,70 @@ class CredentialTests(unittest.TestCase):
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
 
+    def claude_file(self, directory, token, expires_in):
+        path = Path(directory) / ".credentials.json"
+        path.write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": token,
+            "subscriptionType": "max",
+            "expiresAt": int((time.time() + expires_in) * 1000),
+        }}), encoding="utf-8")
+        return path
+
+    def keychain(self, token, expires_in):
+        return {"claudeAiOauth": {
+            "accessToken": token,
+            "subscriptionType": "max",
+            "expiresAt": int((time.time() + expires_in) * 1000),
+        }}
+
+    def test_mac_prefers_fresh_keychain_over_stale_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.claude_file(temp, "stale-file", -3600)
+            with mock.patch.object(needle.sys, "platform", "darwin"), \
+                    mock.patch.object(needle, "claude_keychain", return_value=self.keychain("live", 3600)):
+                pairs = needle.claude_credentials({"credentials_path": str(path)})
+        self.assertEqual(pairs, [("live", "max")])
+
+    def test_mac_orders_sign_ins_by_expiry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.claude_file(temp, "file", 600)
+            with mock.patch.object(needle.sys, "platform", "darwin"), \
+                    mock.patch.object(needle, "claude_keychain", return_value=self.keychain("keychain", 3600)):
+                pairs = needle.claude_credentials({"credentials_path": str(path)})
+        self.assertEqual([token for token, _ in pairs], ["keychain", "file"])
+
+    def test_linux_ignores_keychain(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.claude_file(temp, "file", 3600)
+            with mock.patch.object(needle.sys, "platform", "linux"), \
+                    mock.patch.object(needle, "claude_keychain") as keychain:
+                pairs = needle.claude_credentials({"credentials_path": str(path)})
+        keychain.assert_not_called()
+        self.assertEqual(pairs, [("file", "max")])
+
+    def test_all_claude_sign_ins_expired(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = self.claude_file(temp, "file", -60)
+            with mock.patch.object(needle.sys, "platform", "darwin"), \
+                    mock.patch.object(needle, "claude_keychain", return_value=self.keychain("keychain", -60)):
+                with self.assertRaisesRegex(needle.ProviderError, "expired"):
+                    needle.claude_credentials({"credentials_path": str(path)})
+
+    def test_claude_retries_next_sign_in_after_401(self):
+        used = []
+
+        def fake_get(url, headers):
+            used.append(headers["Authorization"])
+            if headers["Authorization"] == "Bearer first":
+                raise needle.urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+            return {"five_hour": {"utilization": 12, "resets_at": None}}
+
+        with mock.patch.object(needle, "claude_credentials", return_value=[("first", "max"), ("second", "pro")]), \
+                mock.patch.object(needle, "http_get", side_effect=fake_get):
+            result = needle.fetch_claude({})
+        self.assertEqual(used, ["Bearer first", "Bearer second"])
+        self.assertEqual(result["plan"], "Pro")
+
     def test_account_id_claim_variants(self):
         self.assertEqual(needle.account_from_claims({"chatgpt_account_id": "direct"}), "direct")
         self.assertEqual(

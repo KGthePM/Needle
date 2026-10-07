@@ -130,7 +130,7 @@ git clone https://github.com/KGthePM/Needle.git && cd Needle/mac
 
 The script installs SwiftBar with Homebrew if it's missing, copies the plugin into your SwiftBar plugin folder, and sets up the same keys file as Linux (you can copy `config.json` over from the PC). If it can't find your plugin folder, open SwiftBar, pick one, and run `./install-mac.sh /path/to/folder`.
 
-On the Mac, Claude Code keeps its sign-in in the Keychain. During install, macOS asks to let `security` read it. Click **Always Allow** so the menu bar can refresh without prompting. That permission covers the `security` tool, so other scripts that use it could read that one item without asking. Click **Allow** instead if you'd rather approve it each time.
+On the Mac, Claude Code keeps its sign-in in the Keychain. During install, macOS asks to let `security` read it. Click **Always Allow** so the menu bar can refresh without prompting. That permission covers the `security` tool, so other scripts that use it could read that one item without asking. Click **Allow** instead if you'd rather approve it each time. If a `~/.claude/.credentials.json` file is also on the Mac, Needle reads both and uses whichever sign-in is newer, so a leftover file can't make Claude look signed out.
 
 In the menu, each bar is green, amber or red by how much is left, and the word after the reset time says how you're pacing: **▲ fast** (using it faster than it resets), **● on pace**, or **▼ plenty**. When it's fast and Needle can estimate when it runs out, the word becomes that time, for example **▲ out 3:40 PM**. Hover over a row for the full sentence. Services without a key are grouped on one "Not set up" line. SwiftBar refreshes every 5 minutes (the `.5m.` in the file name).
 

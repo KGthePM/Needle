@@ -33,7 +33,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 TIMEOUT = 10
 
 
@@ -153,7 +153,7 @@ def friendly(err, provider):
     if isinstance(err, urllib.error.HTTPError):
         if err.code == 401:
             if provider == "claude":
-                return "Sign-in expired. Open Claude Code once to refresh it."
+                return "Sign-in expired. Run `claude` in a terminal once to refresh it."
             if provider == "codex":
                 return "Sign-in expired. Open OpenCode or Codex once to refresh it."
             return "API key was rejected. Change it in Settings."
@@ -169,39 +169,66 @@ def friendly(err, provider):
 
 # ----------------------------------------------------------------- Claude
 
+def claude_keychain():
+    """Claude Code's sign-in from the macOS login Keychain, or None."""
+    try:
+        out = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if out.returncode == 0:
+            return json.loads(out.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def claude_credentials(cfg):
+    """Unexpired Claude sign-ins as (token, plan) pairs, latest expiry first."""
     path = Path(cfg.get("credentials_path", "~/.claude/.credentials.json")).expanduser()
-    data = load_json(path, None) if path.exists() else None
-    if data is None and sys.platform == "darwin":
-        # On macOS Claude Code keeps its credentials in the login Keychain.
-        try:
-            out = subprocess.run(
-                ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-                capture_output=True, text=True, timeout=60,
-            )
-            if out.returncode == 0:
-                data = json.loads(out.stdout)
-        except (OSError, ValueError, subprocess.SubprocessError):
-            data = None
-    if not data:
+    found = [load_json(path, None) if path.exists() else None]
+    if sys.platform == "darwin":
+        # On macOS Claude Code keeps its live sign-in in the login Keychain. A
+        # credentials file can also linger there without being refreshed, so
+        # read both and prefer whichever expires later.
+        found.append(claude_keychain())
+    found = [data for data in found if isinstance(data, dict)]
+    if not found:
         raise ProviderError("Not signed in. Run `claude` and log in with your plan.")
-    oauth = data.get("claudeAiOauth") or {}
-    token = oauth.get("accessToken")
-    if not token:
+    oauths = [data.get("claudeAiOauth") or {} for data in found]
+    oauths = [oauth for oauth in oauths if isinstance(oauth, dict) and oauth.get("accessToken")]
+    if not oauths:
         raise ProviderError("No plan sign-in found. Claude Code may be using an API key.")
-    expires = oauth.get("expiresAt")
-    if expires and parse_ts(expires) < time.time():
-        raise ProviderError("Sign-in expired. Open Claude Code once to refresh it.")
-    return token, oauth.get("subscriptionType")
+
+    def expiry(oauth):
+        expires = parse_ts(oauth.get("expiresAt"))
+        return float("inf") if expires is None else expires
+
+    live = sorted((o for o in oauths if expiry(o) >= time.time()), key=expiry, reverse=True)
+    if not live:
+        raise ProviderError("Sign-in expired. Run `claude` in a terminal once to refresh it.")
+    pairs = []
+    for oauth in live:
+        pair = (oauth["accessToken"], oauth.get("subscriptionType"))
+        if pair[0] not in (token for token, _ in pairs):
+            pairs.append(pair)
+    return pairs
 
 
 def fetch_claude(cfg):
-    token, plan = claude_credentials(cfg)
-    data = http_get("https://api.anthropic.com/api/oauth/usage", {
-        "Authorization": f"Bearer {token}",
-        "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": cfg.get("user_agent", f"needle/{VERSION}"),
-    })
+    sign_ins = claude_credentials(cfg)
+    for i, (token, plan) in enumerate(sign_ins):
+        try:
+            data = http_get("https://api.anthropic.com/api/oauth/usage", {
+                "Authorization": f"Bearer {token}",
+                "anthropic-beta": "oauth-2025-04-20",
+                "User-Agent": cfg.get("user_agent", f"needle/{VERSION}"),
+            })
+            break
+        except urllib.error.HTTPError as err:
+            # A rejected sign-in may just be stale; try the next one before giving up.
+            if err.code != 401 or i == len(sign_ins) - 1:
+                raise
     spec = [("five_hour", "5-hour", FIVE_HOURS), ("seven_day", "Weekly", ONE_WEEK)]
     if cfg.get("show_model_windows"):
         spec += [("seven_day_opus", "Weekly Opus", ONE_WEEK), ("seven_day_sonnet", "Weekly Sonnet", ONE_WEEK)]
