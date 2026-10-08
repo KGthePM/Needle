@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.8.3</xbar.version>
+# <xbar.version>v1.9.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance, plus a count of your local AI tokens.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -133,7 +133,7 @@ def freshness(p):
 
 
 def update_status(data):
-    """What the last check found when no update is waiting, shown under Check for updates."""
+    """What the last check found when no update is waiting, shown in Settings."""
     if not data:
         return ""
     check = data.get("update_check") or {}
@@ -141,7 +141,7 @@ def update_status(data):
         return ""
     if not check.get("latest"):
         return "Couldn't reach GitHub"
-    return f"Up to date, checked {clock(check['checked_at'])}"
+    return f"Up to date as of {day_clock(check['checked_at'])}"
 
 
 def refresh_ready_at(providers, key):
@@ -398,31 +398,41 @@ def render_unset(providers):
         item(f"{dot} Add {p['name']} key…", tooltip="Opens a box to paste your key", **set_key_action(p["id"]))
 
 
-def render_add_services(connected, enabled, stored_keys, providers, prominent=False):
-    label = "＋ Add more…" if prominent else "＋ Add more"
-    item(label, size="13" if prominent else None, sfimage="plus.circle")
-    available = [(pid, name) for pid, name in SERVICES if pid not in connected]
-    if not available:
-        item("--All services are connected", **SMALL)
-        return
-    for pid, name in available:
+def render_services(enabled, stored_keys, providers):
+    """One place for services: yours first, each with its key and Remove, then the ones to add."""
+    if not enabled:
+        item("＋ Add a service…", size="13", sfimage="plus.circle")
+    else:
+        item("Services", sfimage="square.stack")
+    for pid, name in SERVICES:
+        if pid not in enabled:
+            continue
         provider = providers.get(pid, {})
         error = provider.get("error") if isinstance(provider, dict) else None
-        if pid not in enabled:
-            needs_key = pid in KEY_SETUP and pid not in stored_keys
-            action = add_key_action(pid) if needs_key else fetcher_action("--enable-service", pid)
-            item(f"--{name}", **action)
-            continue
-
-        item(f"--{name}")
+        needs_key = pid in KEY_SETUP and pid not in stored_keys
+        item(f"--{DOT.get(pid, '⚪')} {name}", sfimage="exclamationmark.triangle" if error or needs_key else None)
         if error:
             item(f"----{error}", **SMALL)
-        if pid in KEY_SETUP and pid not in stored_keys:
+        if needs_key:
             item("----Add key…", **set_key_action(pid))
-            continue
-        item("----Retry", **force_refresh_action())
-        if pid in KEY_SETUP:
-            item("----Change key…", **set_key_action(pid))
+        else:
+            if error:
+                item("----Try again", **force_refresh_action())
+            if pid in KEY_SETUP:
+                item("----Change key…", **set_key_action(pid))
+        # Only a stored key gets a confirmation dialog (keep it or delete it).
+        asks = pid in KEY_SETUP and pid in stored_keys
+        item(f"----Remove{'…' if asks else ''}", **remove_action(pid, pid in stored_keys))
+    available = [(pid, name) for pid, name in SERVICES if pid not in enabled]
+    if not available:
+        return
+    if enabled:
+        item("-----")
+        item("--Add", **SMALL)
+    for pid, name in available:
+        needs_key = pid in KEY_SETUP and pid not in stored_keys
+        action = add_key_action(pid) if needs_key else fetcher_action("--enable-service", pid)
+        item(f"--{DOT.get(pid, '⚪')} {name}{'…' if needs_key else ''}", **action)
 
 
 def render_update(data):
@@ -436,40 +446,23 @@ def render_update(data):
     sep()
 
 
-def render_refresh(label, ready_at, **action):
-    # Stays clickable: SwiftBar won't redraw when the cooldown ends, so a disabled row
-    # could outlive it. The time tells people a click before then changes nothing.
-    if ready_at > time.time():
-        label += f" (new data after {clock(ready_at)})"
-    item(f"--{label}", **action)
-
-
-def render_settings(data, enabled, stored_keys):
-    item("Settings", sfimage="gearshape")
-    if enabled:
-        item("--Services")
-        for pid, name in SERVICES:
-            if pid not in enabled:
-                continue
-            item(f"----{name}")
-            if pid in KEY_SETUP:
-                item("------Change key…", **set_key_action(pid))
-            item("------Remove…", **remove_action(pid, pid in stored_keys))
+def render_refresh(data, enabled):
+    """Refresh, with "ignoring cooldowns" as its Option-key alternate."""
     providers = [p for p in (data or {}).get("providers", [])
                  if isinstance(p, dict) and p.get("id") in enabled]
-    render_refresh("Refresh", refresh_ready_at(providers, "refresh_at"), refresh=True, sfimage="arrow.clockwise")
-    render_refresh("Refresh now (skip cooldowns)", refresh_ready_at(providers, "force_refresh_at"),
-                   **force_refresh_action())
-    if data and data.get("update"):
-        item(f"--Update to {data['update']['latest']}…", bash=PY, param1=str(FETCHER), param2="--update",
-             terminal=True)
-    else:
-        item("--Check for updates", bash=PY, param1=str(FETCHER), param2="--check-updates",
-             terminal=False, refresh=True)
-        status = update_status(data)
-        if status:
-            item(f"--{status}", **SMALL)
+    # Stays clickable: SwiftBar won't redraw when the cooldown ends, so a disabled row
+    # could outlive it. The time tells people a click before then changes nothing.
+    label = "Refresh"
+    ready_at = refresh_ready_at(providers, "refresh_at")
+    if ready_at > time.time():
+        label += f" (new data after {clock(ready_at)})"
+    item(label, refresh=True, sfimage="arrow.clockwise")
+    item("Refresh ignoring cooldowns", alternate=True, sfimage="arrow.clockwise", **force_refresh_action())
+
+
+def render_settings(data):
     config = load_config()
+    item("Settings", sfimage="gearshape")
     item("--Menu bar shows")
     current = menu_bar_window(config)
     for mode, name in MENU_BAR_WINDOWS:
@@ -478,8 +471,22 @@ def render_settings(data, enabled, stored_keys):
     notify_on = notifications_on(config)
     item("--Notify when a limit runs low", checked=notify_on, bash=PY, param1=str(FETCHER),
          param2="--set-notify", param3="off" if notify_on else "on", terminal=False, refresh=True)
-    item("--Open raw config", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
-    item("--Debug in Terminal", bash=PY, param1=str(FETCHER), param2="--text", param3="--debug",
+    item("-----")
+    version = (data or {}).get("version")
+    status = update_status(data)
+    about = " · ".join(text for text in (f"Needle {version}" if version else "Needle", status) if text)
+    item(f"--{about}", **SMALL)
+    if data and data.get("update"):
+        item(f"--Update to {data['update']['latest']}…", bash=PY, param1=str(FETCHER), param2="--update",
+             terminal=True)
+    else:
+        item("--Check for Updates…", bash=PY, param1=str(FETCHER), param2="--check-updates",
+             terminal=False, refresh=True)
+    item("-----")
+    item("--Troubleshooting")
+    item("----Refresh ignoring cooldowns", **force_refresh_action())
+    item("----Open config file", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
+    item("----Debug in Terminal", bash=PY, param1=str(FETCHER), param2="--text", param3="--debug",
          param4="--force", terminal=True)
 
 
@@ -641,7 +648,6 @@ def main():
     providers = [p for p in raw_providers
                  if isinstance(p, dict) and (p.get("id") in enabled or p.get("id") == "local")
                  and provider_connected(p)]
-    connected = {p["id"] for p in providers if p["id"] != "local"}
     render_title(providers, menu_bar_window(config))
     sep()
     if data:
@@ -664,8 +670,10 @@ def main():
         item(fatal, **SMALL)
 
     render_update(data)
-    render_add_services(connected, enabled, stored_keys, provider_map, prominent=not connected)
-    render_settings(data, enabled, stored_keys)
+    if enabled:
+        render_refresh(data, enabled)
+    render_services(enabled, stored_keys, provider_map)
+    render_settings(data)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ A PineCompute project.
 
 Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you have left: a Cinnamon panel applet on Linux Mint, a SwiftBar menu-bar item on macOS, and a native system-tray app on Windows. All three use the same fetcher and settings format.
 
-The compact display reads like `C 58%   G 71%   Z 82%   $14`, where `C` is Claude, `G` is ChatGPT/Codex, and `Z` is z.ai. Cinnamon and macOS show the tighter of each service's 5-hour and weekly windows by default, so the number answers "how much can I use right now." To pick a different window, use **Settings > Menu bar shows** on the Mac or **Settings > Percentages show** in the Cinnamon popup: **5-hour**, **Weekly**, **Both** (reads like `C 92/41%`), or **Alternate**, which swaps between a `5h` line and a `Wk` line every few seconds. On the Mac the gauge icon keeps following the tightest limit whatever the text shows. A service without the chosen window shows its tightest one. The display turns amber under 30% and red under 10%. Click it for the full breakdown. When a gauge first turns red you get a desktop notification, and another when it's back above 10%. Nothing repeats while it sits in the red. This works on all three platforms; see [Notifications](#notifications).
+The compact display reads like `C 58%   G 71%   Z 82%   $14`, where `C` is Claude, `G` is ChatGPT/Codex, and `Z` is z.ai. Cinnamon and macOS show the tighter of each service's 5-hour and weekly windows by default, so the number answers "how much can I use right now." To pick a different window, use **Settings > Menu bar shows** on the Mac or **Settings > Panel shows** in the Cinnamon popup (which also offers **Icon only**): **5-hour**, **Weekly**, **Both** (reads like `C 92/41%`), or **Alternate**, which swaps between a `5h` line and a `Wk` line every few seconds. On the Mac the gauge icon keeps following the tightest limit whatever the text shows. A service without the chosen window shows its tightest one. The display turns amber under 30% and red under 10%. Click it for the full breakdown. When a gauge first turns red you get a desktop notification, and another when it's back above 10%. Nothing repeats while it sits in the red. This works on all three platforms; see [Notifications](#notifications).
 
 If you run models on your own computer, Needle also counts those tokens in the popup. It counts up as a reward rather than down as a limit, so it stays out of the compact display; see [Local AI](#local-ai).
 
@@ -19,7 +19,7 @@ Then right-click the panel, choose **Applets**, find **Needle** and press **+**.
 
 ## Add services
 
-New installations start empty. Open Needle and choose **Add more**, then select each provider you want to track. A service moves into the main usage view only after Needle retrieves usable data from it. Failed or incomplete setups stay under **Add more** with their error and retry options. z.ai and OpenRouter open a password-style box for the API key; **Get an API key** opens the provider's key page. Claude and ChatGPT/Codex use existing command-line sign-ins and do not need a pasted key.
+New installations start empty. Open Needle and choose **Add a service** (on Windows, **Add more**), then select each provider you want to track. A service moves into the main usage view only after Needle retrieves usable data from it. On the Mac and Linux, **Services** lists the ones you've added first, each with its status, key and **Remove**, then the ones you can still add. A setup that failed shows its error there with a way to try again. z.ai and OpenRouter open a password-style box for the API key; **Get an API key** opens the provider's key page. Claude and ChatGPT/Codex use existing command-line sign-ins and do not need a pasted key.
 
 - **Claude**: nothing to add. It uses your Claude Code sign-in, so you need to have logged in to `claude` with your Pro or Max plan. Claude Code's sign-in expires every few hours and normally refreshes only while `claude` runs. When Needle finds it expired, it runs `claude auth status` in the background so Claude Code refreshes it, then tries again. If that doesn't work (for example, the Mac just woke up and isn't online yet), Needle says it will try again and asks Claude Code once more on the next refresh. Each attempt is noted in `claude-refresh.json` next to Needle's cache. Needle never refreshes or writes the sign-in itself.
 - **ChatGPT / Codex**: nothing to add. Needle first uses the OpenAI OAuth sign-in managed by OpenCode, then falls back to `~/.codex/auth.json`. Sign into OpenAI from OpenCode with the **ChatGPT Plus/Pro** option, or log into Codex CLI with your ChatGPT plan. A ChatGPT subscription does not include OpenAI API credits, and no API key is needed here. Needle reads the access token in place but never copies, refreshes, or writes it. Set `"credential_source": "opencode"` or `"codex"` if both tools use different accounts.
@@ -95,13 +95,13 @@ python3 ~/.local/bin/needle --debug    # also prints raw API responses
 python3 ~/.local/bin/needle --update   # install the latest release
 ```
 
-On Windows, choose **Settings** > **Debug in terminal** from the tray flyout.
+From the menu, choose **Settings** > **Troubleshooting** > **Debug in Terminal**. On Windows, choose **Settings** > **Debug in terminal** from the tray flyout.
 
 ## Updating
 
 Once a day Needle checks GitHub for a new release. When there is one, an **Update to 1.x.x…** item shows up at the top of the menu on the Mac, and an **Update** button appears in the popup on Linux and Windows. Clicking it opens a terminal window that downloads the release and reruns the installer. Your keys and settings stay as they are, and it doesn't ask the setup questions again. From a terminal, `needle --update` does the same thing.
 
-To check right away instead of waiting for the daily check, choose **Settings** > **Check for updates**. It shows whether you're up to date and when it last checked. From a terminal, `needle --check-updates` does the same.
+To check right away instead of waiting for the daily check, choose **Settings** > **Check for Updates…** on the Mac, click the **Needle** version row in Settings on Linux, or choose **Settings** > **Check for updates** on Windows. Each shows whether you're up to date and when it last checked. From a terminal, `needle --check-updates` does the same.
 
 To turn off the daily check, add `"check_updates": false` at the top level of `config.json`. **Check for updates** still works when you choose it.
 
@@ -134,7 +134,7 @@ On the Mac, Claude Code keeps its sign-in in the Keychain. During install, macOS
 
 In the menu, each bar is green, amber or red by how much is left, and the word after the reset time says how you're pacing: **▲ fast** (using it faster than it resets), **● on pace**, or **▼ plenty**. When it's fast and Needle can estimate when it runs out, the word becomes that time, for example **▲ out 3:40 PM**. Hover over a row for the full sentence. Services without a key are grouped on one "Not set up" line. SwiftBar refreshes every 5 minutes (the `.5m.` in the file name).
 
-The installer offers to open SwiftBar at login, so Needle is back in the menu bar after a restart. Needle uses native **Add more** and **Settings** submenus on macOS. To change login behavior later, use **System Settings** > **General** > **Login Items**. On Linux the applet loads with the panel, so there's nothing to set.
+The installer offers to open SwiftBar at login, so Needle is back in the menu bar after a restart. Needle uses native **Services** and **Settings** submenus on macOS. Hold **Option** while the menu is open and **Refresh** becomes **Refresh ignoring cooldowns**. To change login behavior later, use **System Settings** > **General** > **Login Items**. On Linux the applet loads with the panel, so there's nothing to set.
 
 ## Releasing
 

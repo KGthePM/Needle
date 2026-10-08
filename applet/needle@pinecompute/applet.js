@@ -137,7 +137,7 @@ function updateStatus(data) {
     const check = data.update_check || {};
     if (!check.checked_at) return "";
     if (!check.latest) return "Couldn't reach GitHub";
-    return `Up to date, checked ${ago(check.checked_at)}`;
+    return `Up to date · ${ago(check.checked_at)}`;
 }
 
 const money = (n) => `$${Number(n).toFixed(2)}`;
@@ -498,15 +498,22 @@ class AIUsageApplet extends Applet.TextIconApplet {
     }
 
     _setBusy(busy) {
-        [[this._refreshBtn, false], [this._forceRefreshBtn, true]].forEach(([btn, force]) => {
-            if (!btn) return;
-            const wait = busy ? 0 : this._refreshWait(force);
+        if (this._refreshBtn) {
+            const wait = busy ? 0 : this._refreshWait(false);
+            this._refreshBtn.reactive = !busy && wait <= 0;
+            this._refreshBtn.opacity = this._refreshBtn.reactive ? 255 : 110;
+        }
+        if (this._forceRefreshBtn) {
+            const btn = this._forceRefreshBtn;
+            const wait = busy ? 0 : this._refreshWait(true);
             btn._valueLabel.text = busy ? "Refreshing…" : wait > 0 ? `in ${duration(wait)}` : "";
             btn.reactive = !busy && wait <= 0;
             btn._nameLabel.opacity = btn.reactive ? 255 : 150;
-        });
+        }
         if (this._checkUpdatesBtn) {
-            this._checkUpdatesBtn._valueLabel.text = this._checking ? "Checking…" : updateStatus(this._data);
+            const update = this._data && this._data.update;
+            this._checkUpdatesBtn._valueLabel.text = this._checking ? "Checking…"
+                : update ? `Update to ${update.latest}` : updateStatus(this._data) || "Check for updates";
             this._checkUpdatesBtn.reactive = !busy;
         }
     }
@@ -669,11 +676,14 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._forceRefreshBtn = null;
         this._checkUpdatesBtn = null;
         this._tickers = [];
-        if (this._view === "add") this._renderAddView();
-        else if (this._view === "settings") this._renderSettingsView();
-        else if (this._view === "theme") this._renderThemeView();
-        else if (this._view === "panel-window") this._renderPanelWindowView();
-        else this._renderUsageView();
+        const views = {
+            services: this._renderServicesView,
+            service: this._renderServiceView,
+            settings: this._renderSettingsView,
+            picker: this._renderPickerView,
+            troubleshooting: this._renderTroubleshootingView,
+        };
+        (views[this._view] || this._renderUsageView).call(this);
         this._applyTheme();
     }
 
@@ -681,19 +691,26 @@ class AIUsageApplet extends Applet.TextIconApplet {
         const header = new St.BoxLayout({ style_class: "aiu-header" });
         if (back) {
             const backButton = new St.Button({ label: "←", style_class: "aiu-icon-btn", can_focus: true, track_hover: true });
-            backButton.connect("clicked", () => {
-                this._view = typeof back === "string" ? back : "usage";
-                this._renderMenu();
-            });
+            backButton.connect("clicked", () => this._go(typeof back === "string" ? back : "usage"));
             header.add(backButton, { y_fill: false, y_align: St.Align.MIDDLE });
         }
         header.add(label(title, "aiu-title"), { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
         if (!back) {
+            if (this._enabledServices().length) {
+                this._refreshBtn = new St.Button({ label: "↻", style_class: "aiu-icon-btn", can_focus: true, track_hover: true });
+                this._refreshBtn.connect("clicked", () => this._refresh(false));
+                header.add(this._refreshBtn, { y_fill: false, y_align: St.Align.MIDDLE });
+            }
             const close = new St.Button({ label: "×", style_class: "aiu-icon-btn", can_focus: true, track_hover: true });
             close.connect("clicked", () => this.menu.close());
             header.add(close, { y_fill: false, y_align: St.Align.MIDDLE });
         }
         this._content.add(header);
+    }
+
+    _go(view) {
+        this._view = view;
+        this._renderMenu();
     }
 
     _navButton(text, style, action) {
@@ -713,21 +730,20 @@ class AIUsageApplet extends Applet.TextIconApplet {
         }
         if (this._data && this._data.update) cards.add(this._updateRow(this._data.update));
         const providers = this._shownProviders();
-        const services = providers.filter((p) => p.id !== "local");
         if (!providers.length) {
             const empty = new St.BoxLayout({ vertical: true, style_class: "aiu-empty" });
             empty.add(label("No services connected yet.", "aiu-empty-title"), { x_align: St.Align.MIDDLE });
-            const add = new St.Button({ label: "+  Add more", style_class: "aiu-add-large", can_focus: true, track_hover: true });
-            add.connect("clicked", () => { this._view = "add"; this._renderMenu(); });
+            const add = new St.Button({ label: "+  Add a service", style_class: "aiu-add-large", can_focus: true, track_hover: true });
+            add.connect("clicked", () => this._go("services"));
             empty.add(add, { x_align: St.Align.MIDDLE });
             cards.add(empty);
         } else {
             providers.forEach((p) => cards.add(this._card(p)));
-            if (services.length < SERVICES.length) {
-                this._navButton("+  Add more", "aiu-nav-btn", () => { this._view = "add"; this._renderMenu(); });
-            }
         }
-        this._navButton("Settings", "aiu-nav-btn aiu-settings-btn", () => { this._view = "settings"; this._renderMenu(); });
+        this._settingRow("Services", "›", () => this._go("services")).add_style_class_name("aiu-settings-btn");
+        this._settingRow("Settings", "›", () => this._go("settings"));
+        this._setBusy(this._busy);
+        this._tickers.push(() => this._setBusy(this._busy));
     }
 
     _updateRow(update) {
@@ -739,41 +755,63 @@ class AIUsageApplet extends Applet.TextIconApplet {
         return row;
     }
 
-    _renderAddView() {
-        this._header("Add more", true);
-        const config = this._loadConfig();
-        const providerList = (this._data && this._data.providers) || [];
+    // What a service row says about itself: fine, waiting on a key, or not working.
+    _serviceStatus(service, config, providers) {
+        const section = config[service.id] && typeof config[service.id] === "object" ? config[service.id] : {};
+        if (service.keyUrl && !section.api_key) return "Needs key";
+        const provider = providers[service.id];
+        if (provider && provider.error) return "Not working";
+        return this._providerConnected(provider) ? "Connected" : "Connecting…";
+    }
+
+    _providerMap() {
         const providers = {};
-        providerList.forEach((provider) => { providers[provider.id] = provider; });
-        const available = SERVICES.filter((service) => {
-            const section = config[service.id];
-            const enabled = section && typeof section === "object" && section.enabled !== false;
-            return !enabled || !this._providerConnected(providers[service.id]);
-        });
-        if (!available.length) {
-            this._content.add(this._note("All supported services are connected.", false));
-            return;
+        ((this._data && this._data.providers) || []).forEach((provider) => { providers[provider.id] = provider; });
+        return providers;
+    }
+
+    _serviceRow(service, value, action) {
+        const row = this._settingRow(service.name, value, action);
+        row.get_child().insert_child_at_index(new St.Widget({ style_class: `aiu-dot aiu-dot-${service.id}`, y_align: Clutter.ActorAlign.CENTER }), 0);
+        return row;
+    }
+
+    _renderServicesView() {
+        this._header("Services", true);
+        const config = this._loadConfig();
+        const providers = this._providerMap();
+        const enabled = this._enabledServices();
+        if (enabled.length) {
+            this._content.add(label("YOURS", "aiu-section-label", true));
+            enabled.forEach((service) => {
+                this._serviceRow(service, `${this._serviceStatus(service, config, providers)}  ›`, () => {
+                    this._serviceId = service.id;
+                    this._go("service");
+                });
+            });
         }
-        available.forEach((service) => {
-            const section = config[service.id] && typeof config[service.id] === "object" ? config[service.id] : {};
-            const enabled = section.enabled !== false && !!config[service.id];
-            const hasKey = !!section.api_key;
-            const provider = providers[service.id];
-            let text = `+  ${service.name}`;
-            let action = () => this._addService(service);
-            if (enabled && service.keyUrl && !hasKey) {
-                text = `Add ${service.name} key`;
-                action = () => this._addService(service, true);
-            } else if (enabled) {
-                text = `Retry ${service.name}`;
-                action = () => this._configureService(["--enable-service", service.id], null);
-            }
-            this._navButton(text, "aiu-service-btn", action);
-            if (provider && provider.error) this._content.add(this._note(provider.error, true));
-            if (enabled && service.keyUrl && hasKey && provider && provider.error) {
-                this._navButton(`Change ${service.name} key`, "aiu-service-btn", () => this._addService(service, true));
-            }
-        });
+        const available = SERVICES.filter((service) => enabled.indexOf(service) === -1);
+        if (available.length) {
+            this._content.add(label("ADD", "aiu-section-label", true));
+            available.forEach((service) => this._serviceRow(service, "+", () => this._addService(service)));
+        }
+    }
+
+    _renderServiceView() {
+        const service = this._enabledServices().find((item) => item.id === this._serviceId);
+        if (!service) return this._go("services");
+        this._header(service.name, "services");
+        const config = this._loadConfig();
+        const providers = this._providerMap();
+        const status = this._serviceStatus(service, config, providers);
+        const provider = providers[service.id];
+        this._settingRow("Status", status, () => {}).reactive = false;
+        if (provider && provider.error) this._content.add(this._note(provider.error, true));
+        if (service.keyUrl) {
+            this._settingRow(status === "Needs key" ? "Add key…" : "Change key…", "", () => this._addService(service, true));
+        }
+        if (status === "Not working") this._settingRow("Try again", "", () => this._refresh(true));
+        this._settingRow(service.keyUrl ? "Remove…" : "Remove", "", () => this._removeService(service), true);
     }
 
     _settingRow(name, value, action, destructive) {
@@ -789,44 +827,83 @@ class AIUsageApplet extends Applet.TextIconApplet {
         return row;
     }
 
+    // A row that opens a list of choices, showing the current one.
+    _pickerRow(name, picker) {
+        const current = picker.choices.find((choice) => choice.id === picker.current()) || picker.choices[0];
+        this._settingRow(name, `${current.name}  ›`, () => {
+            this._picker = Object.assign({ title: name }, picker);
+            this._go("picker");
+        });
+    }
+
+    _renderPickerView() {
+        const picker = this._picker;
+        if (!picker) return this._go("settings");
+        this._header(picker.title, picker.back || "settings");
+        const current = picker.current();
+        picker.choices.forEach((choice) => {
+            const selected = current === choice.id;
+            const row = this._settingRow(choice.name, selected ? "✓" : "", () => {
+                picker.choose(choice.id);
+                this._render();
+            });
+            row.add_style_class_name("aiu-theme-choice");
+            if (selected) row.add_style_class_name("aiu-theme-choice-selected");
+        });
+        if (picker.note) this._content.add(this._note(picker.note));
+        if (picker.extra) picker.extra();
+    }
+
+    _panelPicker() {
+        return {
+            choices: PANEL_WINDOWS.concat([{ id: "icon", name: "Icon only" }]),
+            current: () => {
+                if (this.panelStyle === "icon") return "icon";
+                return PANEL_WINDOWS.some((item) => item.id === this.panelWindow) ? this.panelWindow : "tightest";
+            },
+            choose: (id) => {
+                if (id === "icon") {
+                    this.panelStyle = "icon";
+                } else {
+                    this.panelStyle = "compact";
+                    this.panelWindow = id;
+                }
+            },
+            note: "Tightest shows whichever of the 5-hour and weekly limits has less left.",
+        };
+    }
+
     _renderSettingsView() {
         this._header("Settings", true);
-        this._content.add(label("SERVICES", "aiu-section-label", true));
-        this._enabledServices().forEach((service) => {
-            if (service.keyUrl) this._settingRow(`Change ${service.name} key`, "", () => this._addService(service, true));
-            this._settingRow(`Remove ${service.name}`, "", () => this._removeService(service), true);
+        this._content.add(label("PANEL", "aiu-section-label", true));
+        this._pickerRow("Panel shows", this._panelPicker());
+        this._pickerRow("Numbers show", {
+            choices: [{ id: "left", name: "What's left" }, { id: "used", name: "What's used" }],
+            current: () => this.showRemaining ? "left" : "used",
+            choose: (id) => { this.showRemaining = id === "left"; },
+        });
+        this._pickerRow("Theme", {
+            choices: THEME_MODES,
+            current: () => THEME_MODES.some((item) => item.id === this.themeMode) ? this.themeMode : "system",
+            choose: (id) => { this.themeMode = id; },
+            extra: () => this._settingRow("Edit custom palette…", "", () => this._openThemeSettings()),
         });
 
-        this._content.add(label("DISPLAY", "aiu-section-label", true));
-        const intervals = [0, 5, 10, 15, 30, 60];
-        this._settingRow("Auto-refresh", this.refreshMinutes ? `${this.refreshMinutes} min` : "Off", () => {
-            const current = intervals.indexOf(this.refreshMinutes);
-            this.refreshMinutes = intervals[(current + 1) % intervals.length];
-            this._renderMenu();
+        this._content.add(label("UPDATES & ALERTS", "aiu-section-label", true));
+        this._pickerRow("Auto-refresh", {
+            choices: [0, 5, 10, 15, 30, 60].map((n) => ({ id: n, name: n ? `Every ${n} min` : "Off" })),
+            current: () => this.refreshMinutes,
+            choose: (n) => { this.refreshMinutes = n; this._schedule(); },
+            note: "Claude is never asked more than once every 5 minutes either way.",
         });
-        this._settingRow("Panel display", this.panelStyle === "icon" ? "Icon only" : "Percentages", () => {
-            this.panelStyle = this.panelStyle === "icon" ? "compact" : "icon";
-            this._render();
-        });
-        const window = PANEL_WINDOWS.find((item) => item.id === this.panelWindow) || PANEL_WINDOWS[0];
-        this._settingRow("Percentages show", window.name, () => {
-            this._view = "panel-window";
-            this._renderMenu();
-        });
-        this._settingRow("Usage values", this.showRemaining ? "Remaining" : "Used", () => {
-            this.showRemaining = !this.showRemaining;
-            this._render();
-        });
-        const mode = THEME_MODES.find((item) => item.id === this.themeMode) || THEME_MODES[1];
-        this._settingRow("Theme", mode.name, () => {
-            this._view = "theme";
+        this._settingRow("Notify when a limit runs low", this.notifyAlerts ? "On" : "Off", () => {
+            this.notifyAlerts = !this.notifyAlerts;
             this._renderMenu();
         });
 
-        this._content.add(label("UTILITIES", "aiu-section-label", true));
-        this._refreshBtn = this._settingRow("Refresh", "", () => this._refresh(false));
-        this._forceRefreshBtn = this._settingRow("Refresh (skip cooldowns)", "", () => this._refresh(true));
-        this._checkUpdatesBtn = this._settingRow("Check for updates", "", () => {
+        this._content.add(label("ABOUT", "aiu-section-label", true));
+        const version = this._data && this._data.version;
+        this._checkUpdatesBtn = this._settingRow(version ? `Needle ${version}` : "Needle", "", () => {
             if (this._data && this._data.update) {
                 this.menu.close();
                 this._inTerminal("--update");
@@ -834,42 +911,18 @@ class AIUsageApplet extends Applet.TextIconApplet {
                 this._checkUpdates();
             }
         });
-        this._settingRow("Open raw configuration", "", () => { this.menu.close(); this._openConfig(); });
-        this._settingRow("Debug in terminal", "", () => { this.menu.close(); this._openDebug(); });
+        this._settingRow("Troubleshooting", "›", () => this._go("troubleshooting"));
         this._setBusy(this._busy);
         this._tickers.push(() => this._setBusy(this._busy));
     }
 
-    _renderThemeView() {
-        this._header("Theme", "settings");
-        this._content.add(label("APPEARANCE", "aiu-section-label", true));
-        THEME_MODES.forEach((mode) => {
-            const selected = this.themeMode === mode.id;
-            const row = this._settingRow(mode.name, selected ? "Selected" : "", () => {
-                this.themeMode = mode.id;
-                this._render();
-            });
-            row.add_style_class_name("aiu-theme-choice");
-            if (selected) row.add_style_class_name("aiu-theme-choice-selected");
-        });
-        this._content.add(label("CUSTOM", "aiu-section-label", true));
-        this._settingRow("Edit custom palette", "", () => this._openThemeSettings());
-    }
-
-    _renderPanelWindowView() {
-        this._header("Percentages show", "settings");
-        this._content.add(label("PANEL", "aiu-section-label", true));
-        const current = PANEL_WINDOWS.some((item) => item.id === this.panelWindow) ? this.panelWindow : "tightest";
-        PANEL_WINDOWS.forEach((choice) => {
-            const selected = current === choice.id;
-            const row = this._settingRow(choice.name, selected ? "Selected" : "", () => {
-                this.panelWindow = choice.id;
-                this._render();
-            });
-            row.add_style_class_name("aiu-theme-choice");
-            if (selected) row.add_style_class_name("aiu-theme-choice-selected");
-        });
-        this._content.add(this._note("Tightest shows whichever of the 5-hour and weekly limits has less left."));
+    _renderTroubleshootingView() {
+        this._header("Troubleshooting", "settings");
+        this._forceRefreshBtn = this._settingRow("Refresh ignoring cooldowns", "", () => this._refresh(true));
+        this._settingRow("Open config file", "", () => { this.menu.close(); this._openConfig(); });
+        this._settingRow("Debug in terminal", "", () => { this.menu.close(); this._openDebug(); });
+        this._setBusy(this._busy);
+        this._tickers.push(() => this._setBusy(this._busy));
     }
 
     _themeChanged() {

@@ -46,7 +46,7 @@ echo "  Fetcher  $BIN"
 echo "  Keys     $CONF"
 echo
 if [ "${NEW_CONF:-0}" = 1 ]; then
-  echo "Next: open Needle from the panel and choose Add more."
+  echo "Next: open Needle from the panel and choose Add a service."
 fi
 echo "Then right-click your panel > Applets, find \"Needle\", and press +."
 echo "Test from a terminal any time with:  python3 $BIN --text"
