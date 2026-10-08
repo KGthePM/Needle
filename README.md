@@ -117,7 +117,7 @@ Python 3 is required; the included Windows PowerShell is sufficient. From PowerS
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\install-windows.ps1
 ```
 
-Needle appears in the notification area and starts with Windows by default. Hover over the gauge icon for the compact summary, then click it for the usage flyout. The flyout keeps usage on its main page and places refresh, service management, startup, debug and exit actions under **Settings**. Windows only allows an icon in the notification area, so the percentages appear in its tooltip and flyout rather than directly on the taskbar.
+Needle appears in the notification area and starts with Windows by default. Once the installer says Needle is running, its PowerShell window can be closed; Needle continues independently and can be opened again from the Start menu. Hover over the gauge icon for the compact summary, then click it for the usage flyout. The flyout keeps usage on its main page and places refresh, service management, startup, debug and exit actions under **Settings**. Windows only allows an icon in the notification area, so the percentages appear in its tooltip and flyout rather than directly on the taskbar.
 
 Settings are stored in `%APPDATA%\Needle\config.json`; cached usage and the installed app live under `%LOCALAPPDATA%\Needle`. Use `-NoStartup` or `-NoLaunch` with the installer when needed.
 

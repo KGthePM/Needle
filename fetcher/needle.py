@@ -36,7 +36,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.10.0"
+VERSION = "1.11.0"
 TIMEOUT = 10
 
 
@@ -1207,6 +1207,7 @@ def snapshot(cfg, cache, cached_only=False, force=False):
     previous = {p["id"]: p for p in cache.get("providers", [])}
     now = time.time()
     out = []
+    announced_milestones = set()
     for pid, name, fetch in PROVIDERS:
         pcfg = cfg.get(pid, {} if pid in DEFAULT_ON else None)
         if not isinstance(pcfg, dict) or not pcfg.get("enabled", True):
@@ -1221,6 +1222,8 @@ def snapshot(cfg, cache, cached_only=False, force=False):
             continue
         try:
             result = {"id": pid, "name": name, "ok": True, "fetched_at": now, **fetch(pcfg)}
+            if result.get("milestone"):
+                announced_milestones.add(pid)
         except Exception as err:  # noqa: BLE001 - every failure becomes a readable message
             log(f"{pid}: {err!r}")
             msg = friendly(err, pid)
@@ -1241,7 +1244,7 @@ def snapshot(cfg, cache, cached_only=False, force=False):
         # Front ends show these so people know whether Refresh would change anything yet.
         provider["refresh_at"] = next_refresh_at(provider)
         provider["force_refresh_at"] = next_refresh_at(provider, force=True)
-        if provider.get("fetched_at") != now:
+        if provider["id"] not in announced_milestones:
             provider.pop("milestone", None)  # only the fetch that crossed it announces it
         for w in provider.get("windows", []):
             annotate_pace(w, provider.get("fetched_at"))

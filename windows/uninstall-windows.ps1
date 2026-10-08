@@ -37,11 +37,13 @@ function Stop-NeedleTray {
 $appRoot = Join-Path $env:LOCALAPPDATA 'Needle'
 $configDir = Join-Path $env:APPDATA 'Needle'
 $startup = Join-Path ([Environment]::GetFolderPath('Startup')) 'Needle.lnk'
+$startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Needle.lnk'
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 
 Stop-NeedleTray $sid
 
 if (Test-Path -LiteralPath $startup) { Remove-Item -LiteralPath $startup -Force }
+if (Test-Path -LiteralPath $startMenu) { Remove-Item -LiteralPath $startMenu -Force }
 if (Test-Path -LiteralPath $appRoot) { Remove-Item -LiteralPath $appRoot -Recurse -Force }
 if ($Purge) {
     if (Test-Path -LiteralPath $configDir) { Remove-Item -LiteralPath $configDir -Recurse -Force }

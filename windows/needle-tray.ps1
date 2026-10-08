@@ -550,6 +550,7 @@ $script:ConfigPath = if ($env:NEEDLE_CONFIG) { $env:NEEDLE_CONFIG } else { Join-
 $script:CachePath = if ($env:NEEDLE_CACHE) { $env:NEEDLE_CACHE } else { Join-Path $env:LOCALAPPDATA 'Needle\cache\usage.json' }
 $script:StartupPath = Join-Path ([Environment]::GetFolderPath('Startup')) 'Needle.lnk'
 $script:PowerShellPath = (Get-Process -Id $PID).Path
+$script:LauncherPath = Join-Path $PSScriptRoot 'Needle.exe'
 $script:Data = $null
 $script:LastError = $null
 $script:RefreshProcess = $null
@@ -1110,8 +1111,8 @@ function Set-Startup {
     }
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($script:StartupPath)
-    $shortcut.TargetPath = $script:PowerShellPath
-    $shortcut.Arguments = '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File ' + (Quote-ProcessArgument $PSCommandPath)
+    $shortcut.TargetPath = $script:LauncherPath
+    $shortcut.Arguments = ''
     $shortcut.WorkingDirectory = $PSScriptRoot
     $shortcut.Description = 'Needle AI usage monitor'
     $shortcut.Save()

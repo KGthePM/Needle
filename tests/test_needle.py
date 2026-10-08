@@ -1,12 +1,14 @@
 import base64
 import codecs
 import contextlib
+import ctypes
 import importlib.util
 import io
 import json
 import os
 import shutil
 import sqlite3
+import struct
 import subprocess
 import tempfile
 import threading
@@ -19,6 +21,17 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS_POWERSHELLS = tuple(
     path for path in (shutil.which("pwsh"), shutil.which("powershell")) if path
+)
+WINDOWS_CSC = next(
+    (
+        path
+        for path in (
+            Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "csc.exe",
+            Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET" / "Framework" / "v4.0.30319" / "csc.exe",
+        )
+        if path.is_file()
+    ),
+    None,
 )
 SPEC = importlib.util.spec_from_file_location("needle", ROOT / "fetcher" / "needle.py")
 needle = importlib.util.module_from_spec(SPEC)
@@ -893,6 +906,106 @@ class UpdateTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt" and WINDOWS_POWERSHELLS, "PowerShell tray smoke test requires Windows")
 class WindowsTrayTests(unittest.TestCase):
+    def test_launcher_is_gui_app_and_gives_powershell_no_console(self):
+        if WINDOWS_CSC is None:
+            self.skipTest("Windows .NET Framework compiler is unavailable")
+        icon_path = ROOT / "windows" / "needle.ico"
+        icon = icon_path.read_bytes()
+        self.assertEqual(struct.unpack_from("<HHH", icon), (0, 1, 9))
+        self.assertEqual(
+            [icon[6 + 16 * index] or 256 for index in range(9)],
+            [16, 20, 24, 32, 40, 48, 64, 128, 256],
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            launcher = temp / "Needle.exe"
+            result = subprocess.run(
+                [
+                    str(WINDOWS_CSC),
+                    "/nologo",
+                    "/target:winexe",
+                    "/optimize+",
+                    f"/win32icon:{icon_path}",
+                    f"/out:{launcher}",
+                    str(ROOT / "windows" / "needle-launcher.cs"),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            image = launcher.read_bytes()
+            pe_offset = struct.unpack_from("<I", image, 0x3C)[0]
+            self.assertEqual(image[pe_offset:pe_offset + 4], b"PE\0\0")
+            optional_header = pe_offset + 24
+            self.assertEqual(struct.unpack_from("<H", image, optional_header + 68)[0], 2)
+
+            large_icons = (ctypes.c_void_p * 1)()
+            small_icons = (ctypes.c_void_p * 1)()
+            extracted = ctypes.windll.shell32.ExtractIconExW(
+                str(launcher), 0, large_icons, small_icons, 1
+            )
+            self.assertGreaterEqual(extracted, 1)
+            try:
+                self.assertTrue(large_icons[0])
+                self.assertTrue(small_icons[0])
+            finally:
+                for handle in (large_icons[0], small_icons[0]):
+                    if handle:
+                        ctypes.windll.user32.DestroyIcon(handle)
+
+            report = temp / "launch.json"
+            (temp / "needle-tray.ps1").write_text(
+                r'''
+Add-Type -Name NativeMethods -Namespace NeedleLauncherTest -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern System.IntPtr GetConsoleWindow();
+'@
+@{
+    pid = $PID
+    console = [NeedleLauncherTest.NativeMethods]::GetConsoleWindow().ToInt64()
+} | ConvertTo-Json | Set-Content -LiteralPath $env:NEEDLE_LAUNCH_REPORT -Encoding utf8
+''',
+                encoding="utf-8",
+            )
+            env = {**os.environ, "NEEDLE_LAUNCH_REPORT": str(report)}
+            result = subprocess.run([str(launcher)], timeout=10, env=env, check=False)
+            self.assertEqual(result.returncode, 0)
+            for _ in range(100):
+                if report.exists():
+                    break
+                time.sleep(0.05)
+            self.assertTrue(report.exists(), "the launched PowerShell process did not run the tray script")
+            launch = json.loads(report.read_text(encoding="utf-8-sig"))
+            self.assertEqual(launch["console"], 0)
+            process = ctypes.windll.kernel32.OpenProcess(0x100000, False, launch["pid"])
+            if process:
+                try:
+                    self.assertEqual(ctypes.windll.kernel32.WaitForSingleObject(process, 5000), 0)
+                finally:
+                    ctypes.windll.kernel32.CloseHandle(process)
+
+    def test_startup_paths_use_gui_launcher(self):
+        installer = (ROOT / "windows" / "install-windows.ps1").read_text(encoding="utf-8")
+        tray = (ROOT / "windows" / "needle-tray.ps1").read_text(encoding="utf-8")
+        uninstaller = (ROOT / "windows" / "uninstall-windows.ps1").read_text(encoding="utf-8")
+        self.assertIn("/target:winexe", installer)
+        self.assertIn('"/win32icon:$Icon"', installer)
+        self.assertIn("$launcher = Join-Path $appRoot 'Needle.exe'", installer)
+        self.assertEqual(installer.count("$shortcut.TargetPath = $launcher"), 2)
+        self.assertEqual(installer.count("$shortcut.IconLocation = $launcher + ',0'"), 2)
+        self.assertIn("Start-Process -FilePath $launcher -PassThru", installer)
+        self.assertIn("$launcherProcess.WaitForExit(5000)", installer)
+        self.assertNotIn("Start-Process -FilePath $launcher -Wait", installer)
+        self.assertIn("GetFolderPath('Programs')) 'Needle.lnk'", installer)
+        self.assertIn("$shortcut.TargetPath = $script:LauncherPath", tray)
+        self.assertIn("Join-Path $PSScriptRoot 'Needle.exe'", tray)
+        self.assertIn("GetFolderPath('Programs')) 'Needle.lnk'", uninstaller)
+        self.assertNotIn("$shortcut.TargetPath = $powerShell.Source", installer)
+        self.assertNotIn("$shortcut.TargetPath = $script:PowerShellPath", tray)
+
     def test_deferred_render_does_not_dispose_active_combobox(self):
         script = r'''
 Set-StrictMode -Version Latest
