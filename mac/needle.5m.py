@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.9.0</xbar.version>
+# <xbar.version>v1.10.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance, plus a count of your local AI tokens.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -50,6 +50,8 @@ GET_KEY = "__get_key__"
 LIVE = {"bash": "/usr/bin/true", "terminal": False}
 MONO = {"font": "Menlo", "size": "12", "ansi": True, **LIVE}
 SMALL = {"size": "11", "color": "#86868b"}
+SIGNATURE = "PineNeedle"
+SIGNATURE_URL = "https://pinecomputenj.com/needle"
 # SwiftBar on macOS 26 only renders the basic 8 ANSI colors (24-bit codes come out
 # white), and it ignores sfcolor on symbols, so provider dots are emoji instead.
 INK = {"ok": 32, "warn": 33, "crit": 31, "dim": None}  # green, yellow, red, default text
@@ -476,6 +478,7 @@ def render_settings(data):
     status = update_status(data)
     about = " · ".join(text for text in (f"Needle {version}" if version else "Needle", status) if text)
     item(f"--{about}", **SMALL)
+    item(f"--Sharpened by {SIGNATURE} 🌲", alternate=True, href=SIGNATURE_URL, **SMALL)
     if data and data.get("update"):
         item(f"--Update to {data['update']['latest']}…", bash=PY, param1=str(FETCHER), param2="--update",
              terminal=True)
@@ -488,6 +491,8 @@ def render_settings(data):
     item("----Open config file", bash="/usr/bin/open", param1="-t", param2=str(CONFIG), terminal=False)
     item("----Debug in Terminal", bash=PY, param1=str(FETCHER), param2="--text", param3="--debug",
          param4="--force", terminal=True)
+    item("-----")
+    item(f"--🌲 {SIGNATURE}", href=SIGNATURE_URL, **SMALL)
 
 
 # ------------------------------------------------------------------ notifications

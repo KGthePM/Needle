@@ -69,6 +69,7 @@
 .aiu-settings-btn { margin-top: 2px; }
 .aiu-section-label { padding: 12px 8px 4px; font-size: 0.72em; font-weight: bold; }
 .aiu-danger { color: #e06464; }
+.aiu-signature { padding: 14px 8px 2px; font-size: 0.85em; }
 .aiu-key-entry { padding: 7px 9px; margin-top: 10px; min-width: 280px; }
 
 .aiu-footer { spacing: 6px; padding-top: 10px; border-top: 1px solid rgba(128, 128, 128, 0.2); }

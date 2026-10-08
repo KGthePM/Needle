@@ -30,6 +30,8 @@ const PANEL_TAG = { claude: "C", codex: "G", zai: "Z" };
 const PACE_WINDOWS = ["5-hour", "Weekly"]; // windows that decide "how much can I use right now"
 const ALTERNATE_SECONDS = 4; // how long each window stays up when the panel alternates
 const ALTERNATE_TAG = { "5-hour": "5h", weekly: "Wk" };
+const SIGNATURE = "PineNeedle";
+const SIGNATURE_URL = "https://pinecomputenj.com/needle";
 const PANEL_WINDOWS = [ // ids match the panel-window choices in settings-schema.json
     { id: "tightest", name: "Tightest limit" },
     { id: "5-hour", name: "5-hour" },
@@ -911,7 +913,16 @@ class AIUsageApplet extends Applet.TextIconApplet {
                 this._checkUpdates();
             }
         });
+        // Hovering the version reveals who made it, like a signature in the corner.
+        const versionText = this._checkUpdatesBtn._nameLabel.text;
+        this._checkUpdatesBtn.connect("notify::hover", (row) => {
+            row._nameLabel.text = row.hover ? `Sharpened by ${SIGNATURE}` : versionText;
+        });
         this._settingRow("Troubleshooting", "›", () => this._go("troubleshooting"));
+        const signature = new St.Button({ style_class: "aiu-signature", can_focus: true, x_align: St.Align.MIDDLE });
+        signature.set_child(label(SIGNATURE, "aiu-small", true));
+        signature.connect("clicked", () => { this.menu.close(); Util.spawn(["xdg-open", SIGNATURE_URL]); });
+        this._content.add(signature, { x_fill: false, x_align: St.Align.MIDDLE });
         this._setBusy(this._busy);
         this._tickers.push(() => this._setBusy(this._busy));
     }

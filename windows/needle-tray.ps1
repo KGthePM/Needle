@@ -589,6 +589,8 @@ $script:UiFont = [Drawing.Font]::new('Segoe UI', 9)
 $script:UiBoldFont = [Drawing.Font]::new('Segoe UI Semibold', 10)
 $script:UiTitleFont = [Drawing.Font]::new('Segoe UI Semibold', 13)
 $script:UiMonoFont = [Drawing.Font]::new('Consolas', 9)
+$script:Signature = 'PineNeedle'
+$script:SignatureUrl = 'https://pinecomputenj.com/needle'
 $script:Flyout = [Windows.Forms.Form]::new()
 $script:Flyout.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
 $script:Flyout.StartPosition = [Windows.Forms.FormStartPosition]::Manual
@@ -1590,6 +1592,16 @@ function Render-SettingsView {
     $exit = New-FlyoutButton 'Exit Needle' 16 $script:RenderY 388 34 { [Windows.Forms.Application]::Exit() } -Danger
     $script:Content.Controls.Add($exit)
     $script:RenderY += 44
+    # Hovering the signature reveals the version and who made it, like a signature in the corner.
+    $signature = Add-FlyoutText $script:Signature 16 388 $script:UiFont (Get-ThemeColor 'muted') Center 8
+    $signature.AutoSize = $false
+    $signature.Size = [Drawing.Size]::new(388, $signature.PreferredHeight)
+    $signature.Cursor = [Windows.Forms.Cursors]::Hand
+    $version = if ($script:Data) { [string](Get-Value $script:Data 'version' '') } else { '' }
+    $revealed = if ($version) { 'Needle {0} {1} sharpened by {2}' -f $version, [char]0x00B7, $script:Signature } else { 'Sharpened by {0}' -f $script:Signature }
+    $signature.Add_MouseEnter(({ $signature.Text = $revealed }).GetNewClosure())
+    $signature.Add_MouseLeave(({ $signature.Text = $script:Signature }).GetNewClosure())
+    $signature.Add_Click({ Start-Process $script:SignatureUrl })
 }
 
 function Position-Flyout {

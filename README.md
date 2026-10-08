@@ -1,6 +1,6 @@
 # Needle
 
-A PineCompute project.
+A PineCompute project, signed [PineNeedle](https://pinecomputenj.com/needle).
 
 Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you have left: a Cinnamon panel applet on Linux Mint, a SwiftBar menu-bar item on macOS, and a native system-tray app on Windows. All three use the same fetcher and settings format.
 
