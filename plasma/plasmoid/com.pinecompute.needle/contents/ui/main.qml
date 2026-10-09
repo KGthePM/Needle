@@ -826,7 +826,10 @@ PlasmoidItem {
                         }
                         sectionLabel { labelText: "ABOUT" }
                         settingsRow {
-                            labelText: root.jsonData && root.jsonData.version ? "Needle " + root.jsonData.version : "Needle"
+                            // The version shows even before the first fetch returns; the widget's
+                            // own metadata is the fallback.
+                            labelText: root.jsonData && root.jsonData.version ? "Needle " + root.jsonData.version
+                                       : (plasmoid.metaData && plasmoid.metaData.version ? "Needle " + plasmoid.metaData.version : "Needle")
                             valueText: root.checking ? "Checking…"
                                        : root.jsonData && root.jsonData.update ? "Update to " + root.jsonData.update.latest
                                        : NL.updateStatus(root.jsonData, root.nowTs())

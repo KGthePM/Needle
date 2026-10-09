@@ -200,6 +200,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
         this._dialog = null;
         this._instanceId = instanceId;
         this._alerted = {}; // provider id -> true while it sits at 10% or less
+        // Settings shows the version before the first fetch comes back; metadata is always there.
+        this._metadataVersion = metadata && metadata.version ? String(metadata.version) : "";
 
         this.set_applet_icon_symbolic_path(`${metadata.path}/icons/gauge-symbolic.svg`);
         this.set_applet_tooltip("Needle");
@@ -914,7 +916,7 @@ class AIUsageApplet extends Applet.TextIconApplet {
         });
 
         this._content.add(label("ABOUT", "aiu-section-label", true));
-        const version = this._data && this._data.version;
+        const version = (this._data && this._data.version) || this._metadataVersion;
         this._checkUpdatesBtn = this._settingRow(version ? `Needle ${version}` : "Needle", "", () => {
             if (this._data && this._data.update) {
                 this.menu.close();

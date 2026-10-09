@@ -104,6 +104,8 @@ class PlasmaPackageTests(unittest.TestCase):
         self.assertIn("Plasma5Support.DataSource", qml)
         self.assertIn("engine: \"executable\"", qml)
         self.assertIn("NeedleLib.js", qml)
+        # Settings shows a version even before the first fetch returns (Dave, 10/9/26).
+        self.assertIn("plasmoid.metaData", qml)
         # no leftover corruption markers from writing
         for marker in ("-> No.", "QML    }", "read } catch"):
             self.assertNotIn(marker, qml)

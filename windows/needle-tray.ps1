@@ -52,6 +52,12 @@ if (-not (Test-Path -LiteralPath $script:Fetcher -PathType Leaf)) {
     throw "Needle's fetcher was not found at $($script:Fetcher)."
 }
 
+# The settings page shows the version next to the update button even before the first
+# fetch returns; the fetcher file is the source of truth.
+$script:AppVersion = ''
+$versionMatch = Select-String -LiteralPath $script:Fetcher -Pattern '^\s*VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
+if ($versionMatch) { $script:AppVersion = $versionMatch.Matches[0].Groups[1].Value }
+
 if ($Once) {
     $arguments = @($script:Python.Prefix) + @($script:Fetcher, '--text')
     if ($Force) { $arguments += '--force' }
@@ -1539,6 +1545,11 @@ function Render-SettingsView {
     $script:RefreshButtons += @{ Button = $force; Text = 'Refresh skipping cooldowns'; SkipCooldowns = $true }
     $script:Content.Controls.Add($force)
     $script:RenderY += 40
+    # Version line: always visible next to the update button (Dave, 10/9/26), data first,
+    # fetcher file as the fallback before the first fetch returns.
+    $shownVersion = if ($script:Data) { [string](Get-Value $script:Data 'version' '') } else { '' }
+    if (-not $shownVersion) { $shownVersion = $script:AppVersion }
+    if ($shownVersion) { [void](Add-FlyoutText ("Needle " + $shownVersion) 20 384 $script:UiFont (Get-ThemeColor 'muted') Left 8) }
     $update = if ($script:Data) { Get-Value $script:Data 'update' } else { $null }
     if ($update) {
         $check = New-FlyoutButton ('Update to {0}...' -f (Get-Value $update 'latest' '')) 16 $script:RenderY 388 34 {

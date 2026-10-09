@@ -13,7 +13,7 @@
         "Id": "com.pinecompute.needle",
         "License": "MIT",
         "Name": "Needle",
-        "Version": "1.14.0",
+        "Version": "1.14.1",
         "Website": "https://pinecomputenj.com/needle"
     },
     "X-Plasma-API-Minimum-Version": "6.0",
