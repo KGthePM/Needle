@@ -1,0 +1,146 @@
+/* PineNeedle desklet. The card always owns its background (it sits on the desktop,
+   not in a themed popup), so every theme sets every color explicitly. */
+
+.needle-desklet {
+  width: 320px;
+  padding: 16px 18px 13px;
+  border-radius: 16px;
+  border: 1px solid;
+}
+
+.needle-head {
+  padding-bottom: 8px;
+  spacing: 8px;
+}
+
+.needle-title {
+  font-weight: bold;
+  font-size: 1em;
+}
+
+.needle-refresh-btn {
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 1.1em;
+}
+.needle-refresh-btn:hover,
+.needle-refresh-btn:focus { background-color: rgba(128, 128, 128, 0.22); }
+
+/* provider rows */
+.needle-row { padding: 9px 0 7px; spacing: 7px; }
+
+.needle-provider-line { spacing: 8px; }
+
+.needle-tag {
+  min-width: 18px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 0.85em;
+  text-align: center;
+}
+
+/* per-provider brand colors, same palette as the applet's dots */
+.needle-tag-claude     { color: #d97757; }
+.needle-tag-codex      { color: #10a37f; }
+.needle-tag-zai        { color: #5b83ff; }
+.needle-tag-openrouter { color: #9b8cff; }
+.needle-tag-local      { color: #34c58a; }
+
+.needle-name { font-size: 0.95em; }
+
+.needle-window-label { min-width: 84px; font-size: 0.85em; }
+
+.needle-pct { font-weight: bold; }
+
+.needle-reset { font-size: 0.85em; }
+
+.needle-plan,
+.needle-balance,
+.needle-tally,
+.needle-updated { font-size: 0.85em; }
+
+/* gauge fill + percent colors: same thresholds as the applet (left <=30 warn, <=10 crit) */
+.needle-fill-ok   { background-color: #34c58a; }
+.needle-fill-warn { background-color: #e9a93a; }
+.needle-fill-crit { background-color: #f06b72; }
+
+.needle-level-ok   { color: #34c58a; }
+.needle-level-warn { color: #e9a93a; }
+.needle-level-crit { color: #f06b72; }
+
+.needle-tally-line { spacing: 8px; padding: 1px 0; }
+
+.needle-error-note {
+  font-size: 0.85em;
+  padding: 3px 0;
+}
+
+/* the gauge: filled part = what's left, same as the panel applet.
+   Thin and quiet, like a system progress bar. */
+.needle-track {
+  height: 4px;
+  border-radius: 2px;
+}
+
+.needle-fill { border-radius: 2px; }
+
+.needle-footer {
+  padding-top: 8px;
+  spacing: 6px;
+}
+
+/* a desklet older than 1h dims the whole card but keeps rendering */
+.needle-stale { opacity: 0.45; }
+
+/* setup hint when there's no config file at all */
+.needle-setup-hint {
+  font-size: 0.9em;
+  padding: 6px 0;
+}
+
+/* ---------------------------------------------------------------- themes
+   PinePort sibling palette: midnight theme, soft blue accent, same hue family
+   as the applet's Night theme, tuned for the desktop. */
+
+.needle-theme-midnight {
+  background-color: #0d1117;
+  color: #e8edf5;
+  border-color: #24324a;
+}
+.needle-theme-midnight .needle-muted { color: #8fa2bf; }
+.needle-theme-midnight .needle-track { background-color: #263650; }
+.needle-theme-midnight .needle-tag { background-color: #1a2537; }
+.needle-theme-midnight .needle-error-note { color: #ff667a; }
+
+.needle-theme-forest {
+  background-color: #0f1712;
+  color: #e4efe6;
+  border-color: #26402f;
+}
+.needle-theme-forest .needle-muted { color: #8fb89e; }
+.needle-theme-forest .needle-track { background-color: #2a4a35; }
+.needle-theme-forest .needle-tag { background-color: #1a2f22; }
+.needle-theme-forest .needle-error-note { color: #ff8a7a; }
+
+.needle-theme-paper {
+  background-color: #f6f3ec;
+  color: #33302a;
+  border-color: #d8d2c4;
+}
+.needle-theme-paper .needle-muted { color: #7a7466; }
+.needle-theme-paper .needle-track { background-color: #d8d2c4; }
+.needle-theme-paper .needle-tag { background-color: #eae5d9; }
+.needle-theme-paper .needle-error-note { color: #c9364b; }
+
+.needle-theme-plum {
+  background-color: #1a1020;
+  color: #f0e8f5;
+  accent-color: #c084fc;
+  border-color: #3e2a52;
+}
+.needle-theme-plum .needle-muted { color: #b39ed0; }
+.needle-theme-plum .needle-plum-accent { color: #c084fc; }
+.needle-theme-plum .needle-track { background-color: #3e2a52; }
+.needle-theme-plum .needle-tag { background-color: #2c1e3c; }
+.needle-theme-plum .needle-error-note { color: #ff8ab0; }

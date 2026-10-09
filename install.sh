@@ -8,7 +8,9 @@ UPDATE=0
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UUID="needle@pinecompute"
+DESKLET_UUID="needle-desklet@pinecompute"
 APPLET_DIR="$HOME/.local/share/cinnamon/applets/$UUID"
+DESKLET_DIR="$HOME/.local/share/cinnamon/desklets/$DESKLET_UUID"
 BIN="$HOME/.local/bin/needle"
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/needle"
 CONF="$CONF_DIR/config.json"
@@ -23,9 +25,10 @@ fi
 rm -rf "$HOME/.local/share/cinnamon/applets/ai-usage@kgthepm" "$HOME/.local/bin/ai-usage" \
   "${XDG_CACHE_HOME:-$HOME/.cache}/ai-usage"
 
-mkdir -p "$(dirname "$BIN")" "$CONF_DIR" "$APPLET_DIR"
+mkdir -p "$(dirname "$BIN")" "$CONF_DIR" "$APPLET_DIR" "$DESKLET_DIR"
 install -m 755 "$HERE/fetcher/needle.py" "$BIN"
 cp -r "$HERE/applet/$UUID/." "$APPLET_DIR/"
+cp -r "$HERE/desklet/$DESKLET_UUID/." "$DESKLET_DIR/"
 
 if [ ! -f "$CONF" ]; then
   install -m 600 "$HERE/fetcher/config.example.json" "$CONF"
@@ -33,15 +36,19 @@ if [ ! -f "$CONF" ]; then
 fi
 chmod 600 "$CONF"
 
-# Reload the applet if it's already on the panel (harmless if it isn't).
+# Reload the applet and desklet if they're already in use (harmless if they aren't).
 dbus-send --session --dest=org.Cinnamon.LookingGlass --type=method_call \
   /org/Cinnamon/LookingGlass org.Cinnamon.LookingGlass.ReloadExtension \
   string:"$UUID" string:'APPLET' >/dev/null 2>&1 || true
+dbus-send --session --dest=org.Cinnamon.LookingGlass --type=method_call \
+  /org/Cinnamon/LookingGlass org.Cinnamon.LookingGlass.ReloadExtension \
+  string:"$DESKLET_UUID" string:'DESKLET' >/dev/null 2>&1 || true
 
 echo "Installed."
 [ "$UPDATE" = 1 ] && exit 0
 echo
 echo "  Applet   $APPLET_DIR"
+echo "  Desklet  $DESKLET_DIR"
 echo "  Fetcher  $BIN"
 echo "  Keys     $CONF"
 echo

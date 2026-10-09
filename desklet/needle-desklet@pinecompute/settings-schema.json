@@ -1,0 +1,22 @@
+{
+  "head": { "type": "header", "description": "PineNeedle" },
+  "layout": {
+    "type": "combobox",
+    "default": "detailed",
+    "options": { "Detailed": "detailed", "Compact": "compact" },
+    "description": "Layout",
+    "tooltip": "Detailed shows every window per service; Compact shows one tightest gauge per service."
+  },
+  "theme": {
+    "type": "combobox",
+    "default": "midnight",
+    "options": { "Midnight": "midnight", "Forest": "forest", "Paper": "paper", "Plum": "plum" },
+    "description": "Theme"
+  },
+  "show-errored": {
+    "type": "switch",
+    "default": true,
+    "description": "Show services that errored",
+    "tooltip": "Off hides services whose last refresh failed instead of showing them dimmed."
+  }
+}
