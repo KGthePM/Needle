@@ -64,6 +64,27 @@ function ago(ts) {
     return `${duration(s)} ago`;
 }
 
+// Clock time in the user's 12/24-hour preference, with the weekday when it isn't today.
+function clock(ts) {
+    let use24h = false;
+    try {
+        use24h = new Gio.Settings({ schema_id: "org.cinnamon.desktop.interface" }).get_boolean("clock-use-24h");
+    } catch (e) { /* schema missing: keep 12-hour */ }
+    const t = GLib.DateTime.new_from_unix_local(Math.round(ts));
+    const today = GLib.DateTime.new_now_local();
+    const sameDay = t.get_year() === today.get_year() && t.get_day_of_year() === today.get_day_of_year();
+    const time = t.format(use24h ? "%H:%M" : "%l:%M %p").trim();
+    return sameDay ? time : `${t.format("%a")} ${time}`;
+}
+
+// The fetcher's one quiet sentence about where heavy work should go. Rendered, never recomputed.
+function hintText(hint) {
+    if (hint.type === "route") {
+        return `${hint.to} has room until ${clock(hint.until)} — heavy jobs there until then`;
+    }
+    return `${hint.from} frees up around ${clock(hint.until)}`;
+}
+
 const money = (n) => `$${Number(n).toFixed(2)}`;
 
 // The binding limit for a provider: lowest "left" across its pace windows.
@@ -255,6 +276,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
             else if (p.balance) this._content.add(this._balanceRow(p));
             else if (p.error) this._content.add(this._errorRow(p));
         }
+        const hint = this._data && this._data.hint;
+        if (hint) this._content.add(this._note(`${hintText(hint)}.`, false));
 
         this._content.add(this._footer(providers));
         if (this._data && this._data.updated && now() - this._data.updated > STALE_AGE) {

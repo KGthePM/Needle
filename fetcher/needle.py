@@ -36,7 +36,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.12.0"
+VERSION = "1.13.0"
 TIMEOUT = 10
 
 
@@ -945,6 +945,15 @@ def configure_notify(value):
     write_json(CONFIG_PATH, cfg)
 
 
+def configure_routing_hints(value):
+    """Turn the burn-rate routing hints on or off (default on)."""
+    if value not in ("on", "off"):
+        raise ValueError("--set-routing-hints takes on or off.")
+    cfg = load_config_for_update()
+    cfg["routing_hints"] = value == "on"
+    write_json(CONFIG_PATH, cfg)
+
+
 def configure_mac_menu_bar_window(mode):
     """Which limit the Mac menu bar shows for each service."""
     if mode not in MAC_MENU_BAR_WINDOWS:
@@ -1007,6 +1016,7 @@ def run_config_command(argv):
         "--set-windows-theme": "windows-theme",
         "--set-windows-custom-theme": "windows-custom-theme",
         "--set-notify": "notify",
+        "--set-routing-hints": "routing-hints",
         "--set-mac-menu-bar-window": "mac-menu-bar-window",
     }
     selected = [(flag, action) for flag, action in commands.items() if flag in argv]
@@ -1039,6 +1049,8 @@ def run_config_command(argv):
             configure_windows_theme(value)
         elif action == "notify":
             configure_notify(value)
+        elif action == "routing-hints":
+            configure_routing_hints(value)
         elif action == "mac-menu-bar-window":
             configure_mac_menu_bar_window(value)
         elif action == "windows-custom-theme":
@@ -1189,6 +1201,52 @@ def annotate_pace(w, measured_at):
             w["runs_out_at"] = round(runs_out)
 
 
+# ----------------------------------------------------------------- routing hint
+
+def routing_hint(providers):
+    """One quiet sentence about where heavy work should go, or None.
+
+    Only when some provider is fast (outpacing its clock): name the alternative
+    with room for the longest stretch, and never a provider that is itself fast.
+    With no alternative, say when the tightest window frees up. Room-until uses
+    each window's flat average rate so far, the same assumption runs_out_at pins.
+    """
+    with_windows = [p for p in providers if p.get("windows")]
+    fast = [p for p in with_windows
+            if any(w.get("pace") == "fast" for w in p["windows"])]
+    if not fast or any(p.get("error") and not p.get("windows") for p in providers):
+        return None
+    tightest = min((w for p in fast for w in p["windows"] if w.get("runs_out_at")),
+                   key=lambda w: w["runs_out_at"], default=None)
+    if tightest is None:
+        return None
+    roomiest = None
+    for p in with_windows:
+        if p in fast:
+            continue
+        until = None
+        for w in p["windows"]:
+            if not w.get("resets_at"):
+                continue
+            w_until = w.get("runs_out_at") or w["resets_at"]
+            until = w_until if until is None else min(until, w_until)
+        if until is not None and (roomiest is None or until > roomiest[1]):
+            roomiest = (p["name"], until)
+    if roomiest:
+        return {"type": "route", "from": tightest_provider_name(fast, tightest), "to": roomiest[0],
+                "until": roomiest[1]}
+    if len(with_windows) > 1:
+        return None  # several services are all burning fast; no honest alternative to name
+    return {"type": "frees", "from": tightest_provider_name(fast, tightest), "until": tightest["runs_out_at"]}
+
+
+def tightest_provider_name(fast, tightest):
+    for p in fast:
+        if tightest in p["windows"]:
+            return p["name"]
+    return ""
+
+
 # ----------------------------------------------------------------- main
 
 def next_refresh_at(provider, force=False):
@@ -1248,7 +1306,12 @@ def snapshot(cfg, cache, cached_only=False, force=False):
             provider.pop("milestone", None)  # only the fetch that crossed it announces it
         for w in provider.get("windows", []):
             annotate_pace(w, provider.get("fetched_at"))
-    return {"version": VERSION, "updated": now, "providers": out}
+    out = {"version": VERSION, "updated": now, "providers": out}
+    if cfg.get("routing_hints", True):
+        hint = routing_hint(out["providers"])
+        if hint:
+            out["hint"] = hint
+    return out
 
 
 @contextmanager
@@ -1338,6 +1401,13 @@ def print_text(data):
         if p.get("error"):
             print(f"  ! {p['error']}")
         print()
+    hint = data.get("hint")
+    if hint:
+        stamp = time.strftime("%a %I:%M %p", time.localtime(hint["until"]))
+        if hint["type"] == "route":
+            print(f"{hint['to']} has room until {stamp} — heavy jobs there until then\n")
+        else:
+            print(f"{hint['from']} frees up around {stamp}\n")
     if data.get("update"):
         print(f"Update available: {data['update']['latest']} (run needle --update)")
 

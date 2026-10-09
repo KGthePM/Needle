@@ -718,6 +718,103 @@ class PaceTests(unittest.TestCase):
         self.assertEqual(second["providers"][0]["windows"][0]["runs_out_at"], 3667)
 
 
+def hint_providers():
+    """z.ai fast (runs out 3667), Claude slow (room until 8000), Codex even (room 3667)."""
+    return [
+        ("zai", "z.ai", mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 60, "resets_at": 7000, "window_seconds": 10000}]})),
+        ("claude", "Claude", mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 20, "resets_at": 8000, "window_seconds": 10000}]})),
+        ("codex", "ChatGPT / Codex", mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 45, "resets_at": 8000, "window_seconds": 10000}]})),
+    ]
+
+
+def snap(providers, config):
+    with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+        needle.time, "time", return_value=1000
+    ):
+        return needle.snapshot(config, {})
+
+
+class RoutingHintTests(unittest.TestCase):
+    def test_snapshot_offers_the_roomiest_alternative(self):
+        result = snap(hint_providers(), {"zai": {"enabled": True}, "claude": {"enabled": True},
+                                         "codex": {"enabled": True}})
+        self.assertEqual(result["hint"], {"type": "route", "from": "z.ai", "to": "Claude", "until": 8000})
+
+    def test_cached_snapshot_keeps_the_same_hint(self):
+        providers = hint_providers()
+        with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+            needle.time, "time", return_value=1000
+        ):
+            first = needle.snapshot({"zai": {"enabled": True}, "claude": {"enabled": True},
+                                     "codex": {"enabled": True}}, {})
+        with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+            needle.time, "time", return_value=1100
+        ):
+            config = {"zai": {"enabled": True}, "claude": {"enabled": True}, "codex": {"enabled": True}}
+            second = needle.snapshot(config, first, cached_only=True)
+        self.assertEqual(second["hint"], first["hint"])
+
+    def test_no_hint_when_every_provider_is_fast(self):
+        fast = [("zai", "z.ai", mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 60, "resets_at": 7000, "window_seconds": 10000}]})),
+            ("claude", "Claude", mock.Mock(return_value={"windows": [
+                {"label": "5-hour", "used": 80, "resets_at": 8000, "window_seconds": 10000}]}))]
+        self.assertNotIn("hint", snap(fast, {"zai": {"enabled": True}, "claude": {"enabled": True}}))
+
+    def test_no_hint_when_pace_is_healthy(self):
+        calm = [("zai", "z.ai", mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 40, "resets_at": 7000, "window_seconds": 10000}]})),
+            ("claude", "Claude", mock.Mock(return_value={"windows": [
+                {"label": "5-hour", "used": 20, "resets_at": 8000, "window_seconds": 10000}]}))]
+        self.assertNotIn("hint", snap(calm, {"zai": {"enabled": True}, "claude": {"enabled": True}}))
+
+    def test_single_provider_gets_a_frees_hint(self):
+        alone = [("zai", "z.ai", mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 60, "resets_at": 7000, "window_seconds": 10000}]}))]
+        result = snap(alone, {"zai": {"enabled": True}})
+        self.assertEqual(result["hint"], {"type": "frees", "from": "z.ai", "until": 3667})
+
+    def test_single_fast_window_without_projection_gives_no_hint(self):
+        alone = [("zai", "z.ai", mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 100, "resets_at": 7000, "window_seconds": 10000}]}))]
+        self.assertNotIn("hint", snap(alone, {"zai": {"enabled": True}}))
+
+    def test_hint_off_switch_is_honored(self):
+        config = {"routing_hints": False, "zai": {"enabled": True}, "claude": {"enabled": True},
+                  "codex": {"enabled": True}}
+        self.assertNotIn("hint", snap(hint_providers(), config))
+
+    def test_balance_only_providers_are_never_route_targets(self):
+        balance_only = [("zai", "z.ai", mock.Mock(return_value={"windows": [
+            {"label": "5-hour", "used": 60, "resets_at": 7000, "window_seconds": 10000}]})),
+            ("openrouter", "OpenRouter", mock.Mock(return_value={"balance": {
+                "label": "Credits", "remaining": 5.0, "total": 10.0}}))]
+        result = snap(balance_only, {"zai": {"enabled": True},
+                                     "openrouter": {"enabled": True}})
+        self.assertEqual(result["hint"], {"type": "frees", "from": "z.ai", "until": 3667})
+
+
+class RoutingHintSettingTests(unittest.TestCase):
+    def test_set_routing_hints_command_updates_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "config.json"
+            config.write_text(json.dumps({"claude": {"enabled": True}}), encoding="utf-8")
+            with mock.patch.object(needle, "CONFIG_PATH", config):
+                self.assertEqual(needle.run_config_command(["--set-routing-hints", "off"]), 0)
+                self.assertIs(json.loads(config.read_text())["routing_hints"], False)
+                self.assertEqual(needle.run_config_command(["--set-routing-hints", "on"]), 0)
+                self.assertIs(json.loads(config.read_text())["routing_hints"], True)
+
+    def test_set_routing_hints_rejects_bad_values(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "config.json"
+            with mock.patch.object(needle, "CONFIG_PATH", config):
+                self.assertEqual(needle.run_config_command(["--set-routing-hints", "maybe"]), 2)
+
+
 class NotifySettingTests(unittest.TestCase):
     def test_set_notify_command_updates_config(self):
         with tempfile.TemporaryDirectory() as temp:

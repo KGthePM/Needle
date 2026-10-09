@@ -1307,6 +1307,19 @@ function Render-UsageView {
         Add-FlyoutDivider 7 10
     }
 
+    # The fetcher's one quiet sentence about where heavy work should go. Rendered, never recomputed.
+    $hint = Get-Value $script:Data 'hint'
+    if ($hint) {
+        $text = if ((Get-Value $hint 'type' '') -eq 'route') {
+            '{0} has room until {1} — heavy jobs there until then' -f (Get-Value $hint 'to' ''), (Format-Clock (Get-Value $hint 'until' 0))
+        }
+        else {
+            '{0} frees up around {1}' -f (Get-Value $hint 'from' ''), (Format-Clock (Get-Value $hint 'until' 0))
+        }
+        [void](Add-FlyoutText "$text." 34 370 $script:UiFont (Get-ThemeColor 'muted') Left 5)
+        Add-FlyoutDivider 7 10
+    }
+
     if ($script:LastError) {
         [void](Add-FlyoutText ('! ' + $script:LastError) 16 388 $script:UiFont (Get-ThemeColor 'critical') Left 8)
     }

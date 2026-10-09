@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.12.0</xbar.version>
+# <xbar.version>v1.13.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance, plus a count of your local AI tokens.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -306,6 +306,13 @@ def pace_text(w):
             note += f", {duration(w['resets_at'] - w['runs_out_at'])} before it resets"
         note += "."
     return paint(text, ink), note
+
+
+def hint_text(h):
+    """The fetcher's one quiet sentence about where heavy work should go. Rendered, never recomputed."""
+    if h.get("type") == "route":
+        return f"{h['to']} has room until {day_clock(h['until'])} — heavy jobs there until then"
+    return f"{h['from']} frees up around {day_clock(h['until'])}"
 
 
 def render_local(p, width):
@@ -670,6 +677,10 @@ def main():
             if i:
                 sep()
             render_provider(p, width)
+        hint = (data or {}).get("hint")
+        if hint:
+            sep()
+            item(paint(hint_text(hint), "dim"), **SMALL)
         sep()
     elif fatal:
         item(fatal, **SMALL)

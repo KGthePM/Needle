@@ -123,6 +123,14 @@ function ago(ts) {
     return `${duration(s)} ago`;
 }
 
+// The fetcher's one quiet sentence about where heavy work should go. Rendered, never recomputed.
+function hintText(hint) {
+    if (hint.type === "route") {
+        return `${hint.to} has room until ${clock(hint.until)} — heavy jobs there until then`;
+    }
+    return `${hint.from} frees up around ${clock(hint.until)}`;
+}
+
 // "Updated 3m ago · next refresh in 2m": how old a provider's numbers are, and whether
 // Refresh would fetch new ones yet. Claude and Codex wait 5 minutes between real reads.
 function freshness(p) {
@@ -742,6 +750,8 @@ class AIUsageApplet extends Applet.TextIconApplet {
         } else {
             providers.forEach((p) => cards.add(this._card(p)));
         }
+        const hint = this._data && this._data.hint;
+        if (hint) cards.add(this._note(`${hintText(hint)}.`, false));
         this._settingRow("Services", "›", () => this._go("services")).add_style_class_name("aiu-settings-btn");
         this._settingRow("Settings", "›", () => this._go("settings"));
         this._setBusy(this._busy);
