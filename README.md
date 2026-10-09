@@ -2,7 +2,7 @@
 
 A PineCompute project, signed [PineNeedle](https://pinecomputenj.com/needle).
 
-Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you have left: a Cinnamon panel applet on Linux Mint, a SwiftBar menu-bar item on macOS, and a native system-tray app on Windows. All three use the same fetcher and settings format.
+Shows how much of your Claude, ChatGPT/Codex, z.ai and OpenRouter limits you have left: a Cinnamon panel applet on Linux Mint, a Plasma panel widget on KDE (Plasma 6), a SwiftBar menu-bar item on macOS, and a native system-tray app on Windows. All four use the same fetcher and settings format.
 
 The compact display reads like `C 58%   G 71%   Z 82%   $14`, where `C` is Claude, `G` is ChatGPT/Codex, and `Z` is z.ai. Cinnamon and macOS show the tighter of each service's 5-hour and weekly windows by default, so the number answers "how much can I use right now." To pick a different window, use **Settings > Menu bar shows** on the Mac or **Settings > Panel shows** in the Cinnamon popup (which also offers **Icon only**): **5-hour**, **Weekly**, **Both** (reads like `C 92/41%`), or **Alternate**, which swaps between a `5h` line and a `Wk` line every few seconds. On the Mac the gauge icon keeps following the tightest limit whatever the text shows. A service without the chosen window shows its tightest one. The display turns amber under 30% and red under 10%. Click it for the full breakdown. When a gauge first turns red you get a desktop notification, and another when it's back above 10%. Nothing repeats while it sits in the red. This works on all three platforms; see [Notifications](#notifications).
 
@@ -18,6 +18,16 @@ git clone https://github.com/KGthePM/Needle.git && cd Needle
 ```
 
 Then right-click the panel, choose **Applets**, find **Needle** and press **+**.
+
+## Install on KDE Plasma
+
+Plasma 6 or newer is required. From the cloned repository:
+
+```bash
+./plasma/install-plasma.sh
+```
+
+Then right-click the panel, choose **Add Widgets**, find **Needle** and drag it to your panel. The widget shares its fetcher, keys and settings with the Cinnamon applet, so a machine with both gets the same numbers. The compact panel text, click popup, gauges, notifications, Local AI tally and update checks all work the same as on Mint. Themes follow Plasma's own colors in **System** mode, with Light, Dark and Night presets too.
 
 ## Add services
 

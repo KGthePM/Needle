@@ -1,0 +1,21 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "kgomez2k19@gmail.com",
+                "Name": "KGthePM"
+            }
+        ],
+        "Category": "Utilities",
+        "Description": "Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance",
+        "Icon": "view-statistics",
+        "Id": "com.pinecompute.needle",
+        "License": "MIT",
+        "Name": "Needle",
+        "Version": "1.14.0",
+        "Website": "https://pinecomputenj.com/needle"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-StandAloneApp": true
+}
