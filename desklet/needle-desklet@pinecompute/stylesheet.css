@@ -8,6 +8,11 @@
   border: 1px solid;
 }
 
+/* Landscape: wider card, services in two columns (desklet.js BAR_WIDTH mirrors these) */
+.needle-landscape { width: 540px; }
+.needle-columns { spacing: 20px; }
+.needle-column { width: 240px; }
+
 .needle-head {
   padding-bottom: 8px;
   spacing: 8px;
@@ -144,3 +149,57 @@
 .needle-theme-plum .needle-track { background-color: #3e2a52; }
 .needle-theme-plum .needle-tag { background-color: #2c1e3c; }
 .needle-theme-plum .needle-error-note { color: #ff8ab0; }
+
+/* Retro CRT: the card is a beige monitor bezel, the content box is a green
+   phosphor screen, and gauges are drawn as text cells by desklet.js. */
+
+.needle-theme-retro {
+  background-gradient-direction: vertical;
+  background-gradient-start: #d8d0b8;
+  background-gradient-end: #b9b096;
+  color: #39ff6a;
+  border-color: #8a8270;
+  border-width: 2px;
+  border-radius: 18px;
+  padding: 14px 14px 8px;
+  font-family: monospace;
+}
+.needle-theme-retro .needle-screen {
+  background-gradient-direction: vertical;
+  background-gradient-start: #0b1a0f;
+  background-gradient-end: #050c07;
+  border: 3px solid #2e2b24;
+  border-radius: 12px;
+  padding: 12px 12px 9px;
+  text-shadow: 0 0 4px rgba(57, 255, 106, 0.55);
+}
+.needle-theme-retro .needle-title { font-size: 0.95em; }
+.needle-theme-retro .needle-muted { color: #1f9e45; }
+.needle-theme-retro .needle-tag {
+  background-color: #39ff6a;
+  color: #04110a;
+  border-radius: 0;
+  text-shadow: none;
+}
+.needle-theme-retro .needle-refresh-btn { border-radius: 0; }
+.needle-theme-retro .needle-error-note { color: #ff5f56; }
+.needle-theme-retro .needle-level-ok   { color: #39ff6a; }
+.needle-theme-retro .needle-level-warn { color: #ffb000; }
+.needle-theme-retro .needle-level-crit { color: #ff5f56; }
+.needle-theme-retro .needle-textbar { font-size: 0.9em; }
+
+.needle-theme-retro .needle-bezel {
+  padding: 7px 6px 0;
+  text-shadow: none;
+}
+.needle-theme-retro .needle-bezel-badge {
+  color: #6f6858;
+  font-size: 0.7em;
+  font-weight: bold;
+  letter-spacing: 2px;
+}
+.needle-theme-retro .needle-bezel-led {
+  color: #2ee85c;
+  font-size: 0.7em;
+  text-shadow: 0 0 4px rgba(46, 232, 92, 0.9);
+}

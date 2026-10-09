@@ -28,6 +28,10 @@ const STALE_AGE = 3600;           // snapshot older than 1h dims the card
 
 const LEVEL_FILL = { ok: "needle-fill-ok", warn: "needle-fill-warn", crit: "needle-fill-crit" };
 
+const THEMES = ["midnight", "forest", "paper", "plum", "retro"];
+const RETRO_CELLS = { portrait: 24, landscape: 20 }; // character cells in a Retro CRT text gauge
+const BAR_WIDTH = { portrait: 300, landscape: 240 };  // gauge fill width at 100%; mirrors the CSS widths
+
 const now = () => Date.now() / 1000;
 
 function level(left) {
@@ -101,6 +105,7 @@ function tagFor(p) {
 class PineNeedleDesklet extends Desklet.Desklet {
     constructor(metadata, deskletId) {
         super(metadata, deskletId);
+        this._version = metadata.version || "";
         this._data = null;
         this._fatal = null;
         this._busy = false;
@@ -113,7 +118,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
         this.settings = new Settings.DeskletSettings(this, UUID, deskletId);
         this.settings.bind("layout", "layout", () => this._render());
-        this.settings.bind("theme", "theme", () => this._applyTheme());
+        this.settings.bind("orientation", "orientation", () => this._render());
+        this.settings.bind("theme", "theme", () => this._render()); // retro swaps widgets, not just colors
         this.settings.bind("show-errored", "showErrored", () => this._render());
 
         this._applyTheme();
@@ -230,8 +236,14 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
     _buildCard() {
         this._card = new St.BoxLayout({ vertical: true, style_class: "needle-desklet" });
-        this._content = new St.BoxLayout({ vertical: true });
+        // The "screen" only has a look of its own in the Retro CRT theme; elsewhere it's a plain box.
+        this._content = new St.BoxLayout({ vertical: true, style_class: "needle-screen" });
         this._card.add(this._content);
+        // Monitor chin under the screen: badge + power LED. Retro CRT only.
+        this._bezel = new St.BoxLayout({ style_class: "needle-bezel" });
+        this._bezel.add(new St.Label({ text: SIGNATURE.toUpperCase(), style_class: "needle-bezel-badge" }), { expand: true });
+        this._bezel.add(new St.Label({ text: "●", style_class: "needle-bezel-led" }));
+        this._card.add(this._bezel);
         this._render();
         return this._card;
     }
@@ -242,7 +254,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._applyTheme();
 
         const header = new St.BoxLayout({ style_class: "needle-head" });
-        header.add(new St.Label({ text: SIGNATURE, style_class: "needle-title" }), { expand: true });
+        const title = this._retro() ? `${SIGNATURE.toUpperCase()} v${this._version} _` : SIGNATURE;
+        header.add(new St.Label({ text: title, style_class: "needle-title" }), { expand: true });
         const refresh = new St.Button({ label: "↻", style_class: "needle-refresh-btn", can_focus: true, track_hover: true });
         refresh.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
         header.add(refresh);
@@ -270,11 +283,25 @@ class PineNeedleDesklet extends Desklet.Desklet {
         }
 
         const detailed = this.layout !== "compact";
+        const rows = [];
         for (const p of providers) {
-            if (p.tally) this._content.add(this._tallyRow(p));
-            else if (p.windows && p.windows.length) this._content.add(this._gaugeRow(p, detailed));
-            else if (p.balance) this._content.add(this._balanceRow(p));
-            else if (p.error) this._content.add(this._errorRow(p));
+            if (p.tally) rows.push(this._tallyRow(p));
+            else if (p.windows && p.windows.length) rows.push(this._gaugeRow(p, detailed));
+            else if (p.balance) rows.push(this._balanceRow(p));
+            else if (p.error) rows.push(this._errorRow(p));
+        }
+        if (this._landscape()) {
+            // Two columns side by side; the left one takes the odd service out.
+            const columns = new St.BoxLayout({ style_class: "needle-columns" });
+            const split = Math.ceil(rows.length / 2);
+            for (const part of [rows.slice(0, split), rows.slice(split)]) {
+                const col = new St.BoxLayout({ vertical: true, style_class: "needle-column" });
+                part.forEach((r) => col.add(r));
+                columns.add(col);
+            }
+            this._content.add(columns);
+        } else {
+            rows.forEach((r) => this._content.add(r));
         }
         const hint = this._data && this._data.hint;
         if (hint) this._content.add(this._note(`${hintText(hint)}.`, false));
@@ -386,15 +413,24 @@ class PineNeedleDesklet extends Desklet.Desklet {
     }
 
     _bar(frac, lvl) {
+        if (this._retro()) return this._textBar(frac, lvl);
         const track = new St.Widget({ style_class: "needle-track", layout_manager: new Clutter.FixedLayout() });
         track.set_x_align(Clutter.ActorAlign.START);
         const px = Math.max(0, Math.min(1, frac));
         const fill = new St.Widget({ style_class: `needle-fill ${LEVEL_FILL[lvl]}` });
-        fill.set_size(Math.round(300 * px), 4);
+        fill.set_size(Math.round(BAR_WIDTH[this._orientationName()] * px), 4);
         fill.set_position(0, 0);
         track.add_child(fill);
         track.set_height(4);
         return track;
+    }
+
+    // Retro CRT gauge: [██████░░░░] in character cells, colored by level like the bar fill.
+    _textBar(frac, lvl) {
+        const total = RETRO_CELLS[this._orientationName()];
+        const filled = Math.round(total * Math.max(0, Math.min(1, frac)));
+        const cells = "█".repeat(filled) + "░".repeat(total - filled);
+        return new St.Label({ text: `[${cells}]`, style_class: `needle-textbar needle-level-${lvl}` });
     }
 
     _note(text, isError) {
@@ -404,11 +440,27 @@ class PineNeedleDesklet extends Desklet.Desklet {
         return l;
     }
 
+    _themeName() {
+        return THEMES.indexOf(this.theme) !== -1 ? this.theme : "midnight";
+    }
+
+    _retro() {
+        return this._themeName() === "retro";
+    }
+
+    _orientationName() {
+        return this.orientation === "landscape" ? "landscape" : "portrait";
+    }
+
+    _landscape() {
+        return this._orientationName() === "landscape";
+    }
+
     _applyTheme() {
         if (!this._card) return;
-        const themes = ["midnight", "forest", "paper", "plum"];
-        const mode = themes.indexOf(this.theme) !== -1 ? this.theme : "midnight";
-        this._card.set_style_class_name(`needle-desklet needle-theme-${mode}`);
+        const shape = this._landscape() ? " needle-landscape" : "";
+        this._card.set_style_class_name(`needle-desklet needle-theme-${this._themeName()}${shape}`);
+        this._bezel.visible = this._retro();
     }
 }
 
