@@ -279,3 +279,136 @@
   border-radius: 0 0 3px 3px;
   background-color: #2b1b11;
 }
+
+/* Pocket: a gray handheld game console. The card is the plastic shell (rounder in the
+   bottom-right corner), the frame is the slate screen bezel with a power LED, and the
+   screen is a four-shade pea-green LCD whose gauges are pixel cells (desklet.js
+   GB_CELLS mirrors the screen's inner width). Portrait puts the D-pad, A/B, Start/Select
+   and speaker below the screen; landscape flanks the screen with them. */
+
+.needle-theme-gb {
+  background-gradient-direction: vertical;
+  background-gradient-start: #d6d4ce;
+  background-gradient-end: #bebcb4;
+  color: #0f380f;
+  border-color: #9a978e;
+  border-radius: 12px 12px 46px 12px;
+  padding: 14px 16px 12px;
+  font-family: monospace;
+}
+.needle-gb-landscape { border-radius: 26px; padding: 12px 16px; }
+.needle-theme-gb .needle-body { spacing: 10px; }
+
+.needle-theme-gb .needle-frame {
+  background-color: #5d6070;
+  border-radius: 8px 8px 30px 8px;
+  padding: 6px 18px 14px;
+  spacing: 5px;
+}
+.needle-gb-landscape .needle-frame { border-radius: 10px; padding: 6px 12px 10px; }
+.needle-gb-frame-top { spacing: 5px; }
+.needle-gb-frame-text {
+  color: #b9bccb;
+  font-size: 0.6em;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+.needle-gb-led {
+  color: #ff3b3b;
+  font-size: 0.65em;
+  text-shadow: 0 0 4px rgba(255, 59, 59, 0.9);
+}
+.needle-gb-led-low { color: #6e2a2a; text-shadow: none; }
+
+.needle-theme-gb .needle-screen {
+  background-gradient-direction: vertical;
+  background-gradient-start: #a4c414;
+  background-gradient-end: #8fae0d;
+  border: 2px solid #3c4a1c;
+  border-radius: 3px;
+  padding: 8px 10px;
+}
+.needle-theme-gb .needle-column { width: 180px; }
+.needle-gb-landscape .needle-columns { spacing: 16px; }
+.needle-gb-landscape .needle-window-label { min-width: 60px; }
+.needle-theme-gb .needle-title { font-size: 0.95em; }
+.needle-theme-gb .needle-muted { color: #306230; }
+.needle-theme-gb .needle-tag {
+  background-color: #306230;
+  color: #a4c414;
+  border-radius: 0;
+}
+.needle-theme-gb .needle-error-note { color: #0f380f; font-weight: bold; }
+.needle-theme-gb .needle-level-ok   { color: #306230; }
+.needle-theme-gb .needle-level-warn { color: #0f380f; }
+.needle-theme-gb .needle-level-crit { color: #0f380f; }
+
+.needle-gb-cells { spacing: 2px; }
+.needle-gb-cell {
+  width: 8px;
+  height: 6px;
+  background-color: rgba(15, 56, 15, 0.14);
+}
+.needle-gb-cell-ok   { background-color: #306230; }
+.needle-gb-cell-warn { background-color: #0f380f; }
+.needle-gb-cell-crit { background-color: #0f380f; }
+
+/* the lower half: wordmark, controls */
+.needle-gb-deck { padding: 8px 4px 0; spacing: 10px; }
+.needle-gb-brand { spacing: 6px; }
+.needle-gb-brand-name {
+  color: #27297a;
+  font-style: italic;
+  font-weight: bold;
+  font-family: sans-serif;
+}
+.needle-gb-brand-model {
+  color: #27297a;
+  font-size: 0.75em;
+  font-weight: bold;
+  letter-spacing: 2px;
+}
+.needle-gb-pads { padding: 0 6px; }
+.needle-gb-bottom { spacing: 6px; }
+.needle-gb-side { width: 50px; spacing: 14px; }
+
+.needle-gb-dpad-arm,
+.needle-gb-dpad-gap { width: 13px; height: 13px; }
+.needle-gb-dpad-arm { background-color: #2b2b30; }
+
+.needle-gb-ab { spacing: 8px; }
+.needle-gb-key-low { padding-top: 14px; }  /* B sits lower than A, like the real slant */
+.needle-gb-key-high { padding-bottom: 14px; }
+.needle-gb-key,
+.needle-gb-menu-key { spacing: 3px; }
+.needle-gb-button {
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  border: 1px solid #5e1236;
+  background-gradient-direction: vertical;
+  background-gradient-start: #b52d6c;
+  background-gradient-end: #861d4f;
+}
+.needle-gb-landscape .needle-gb-button { width: 20px; height: 20px; border-radius: 10px; }
+.needle-gb-button-live:hover,
+.needle-gb-button-live:focus {
+  background-gradient-start: #cf4483;
+  background-gradient-end: #9c2860;
+}
+.needle-gb-button-live:active { background-gradient-start: #861d4f; background-gradient-end: #6e1640; }
+.needle-gb-key-label {
+  color: #27297a;
+  font-size: 0.55em;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.needle-gb-menu { spacing: 10px; }
+.needle-gb-pill {
+  width: 26px;
+  height: 7px;
+  border-radius: 4px;
+  background-color: #85848c;
+  border: 1px solid #6c6b72;
+}

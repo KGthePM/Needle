@@ -30,12 +30,14 @@ const STALE_AGE = 3600;           // snapshot older than 1h dims the card
 
 const LEVEL_FILL = { ok: "needle-fill-ok", warn: "needle-fill-warn", crit: "needle-fill-crit" };
 
-const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv"];
+const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv", "gb"];
 const RETRO_CELLS = { portrait: 24, landscape: 20 }; // character cells in a Retro CRT text gauge
 const BAR_WIDTH = { portrait: 300, landscape: 240 };  // gauge fill width at 100%; mirrors the CSS widths
 // Tube TV: the cabinet and screen frame eat into the card, so the screen is narrower.
 const TV_BAR_WIDTH = { portrait: 266, landscape: 208 };
 const TV_ANTENNA_HEIGHT = 36; // px of rabbit ears above the cabinet; keep the card small
+// Pocket handheld: gauges are rows of LCD pixel cells (8px + 2px gap) sized to the screen.
+const GB_CELLS = { portrait: 26, landscape: 18 };
 
 const now = () => Date.now() / 1000;
 
@@ -250,10 +252,27 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._body = new St.BoxLayout({ vertical: true, style_class: "needle-body" });
         // The "screen" only has a look of its own in the Retro CRT and Tube TV themes; elsewhere it's a plain box.
         this._content = new St.BoxLayout({ vertical: true, style_class: "needle-screen" });
-        this._body.add(this._content, { expand: true });
+        // Pocket's side controls flank the screen in landscape, like a wide-body handheld.
+        this._gbLeft = new St.BoxLayout({ vertical: true, style_class: "needle-gb-side" });
+        this._body.add(this._gbLeft, { y_fill: false, y_align: St.Align.MIDDLE });
+        // The frame is the handheld's dark screen bezel with its power LED; a plain box elsewhere.
+        this._frame = new St.BoxLayout({ vertical: true, style_class: "needle-frame" });
+        this._frameTop = new St.BoxLayout({ style_class: "needle-gb-frame-top" });
+        this._gbLed = new St.Label({ text: "●", style_class: "needle-gb-led" });
+        this._frameTop.add(this._gbLed);
+        this._frameTop.add(new St.Label({ text: "POWER", style_class: "needle-gb-frame-text" }), { expand: true });
+        this._frameTop.add(new St.Label({ text: "POCKET MATRIX", style_class: "needle-gb-frame-text" }));
+        this._frame.add(this._frameTop);
+        this._frame.add(this._content, { expand: true });
+        this._body.add(this._frame, { expand: true });
         this._controls = new St.BoxLayout({ style_class: "needle-tv-controls" });
         this._body.add(this._controls);
+        this._gbRight = new St.BoxLayout({ vertical: true, style_class: "needle-gb-side" });
+        this._body.add(this._gbRight, { y_fill: false, y_align: St.Align.MIDDLE });
         this._card.add(this._body);
+        // Pocket's lower half in portrait: wordmark, D-pad, A/B, Start/Select and speaker.
+        this._gbDeck = new St.BoxLayout({ vertical: true, style_class: "needle-gb-deck" });
+        this._card.add(this._gbDeck);
         // Monitor chin under the screen: badge + power LED. Retro CRT only.
         this._bezel = new St.BoxLayout({ style_class: "needle-bezel" });
         this._bezel.add(new St.Label({ text: SIGNATURE.toUpperCase(), style_class: "needle-bezel-badge" }), { expand: true });
@@ -282,8 +301,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
         header.add(new St.Label({ text: version, style_class: "needle-version needle-muted", y_align: Clutter.ActorAlign.CENTER }), { expand: true });
         const refresh = new St.Button({ label: "↻", style_class: "needle-refresh-btn", can_focus: true, track_hover: true });
         refresh.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
-        // Tube TV refreshes from its channel knob instead.
-        if (!this._tv()) header.add(refresh);
+        // Tube TV refreshes from its channel knob, Pocket from its A button.
+        if (!this._tv() && !this._gb()) header.add(refresh);
         this._content.add(header);
 
         if (this._fatal) {
@@ -328,6 +347,11 @@ class PineNeedleDesklet extends Desklet.Desklet {
         } else {
             rows.forEach((r) => this._content.add(r));
         }
+        // Pocket's power LED dims like a low battery when any service is nearly out.
+        const low = providers.some((p) => { const left = bindingLeft(p); return left !== null && level(left) === "crit"; });
+        if (low) this._gbLed.add_style_class_name("needle-gb-led-low");
+        else this._gbLed.remove_style_class_name("needle-gb-led-low");
+
         const hint = this._data && this._data.hint;
         if (hint) this._content.add(this._note(`${hintText(hint)}.`, false));
 
@@ -358,8 +382,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
             const left = 100 - w.used;
             const line = new St.BoxLayout({ style_class: "needle-provider-line" });
             line.add(new St.Label({ text: w.label, style_class: "needle-window-label needle-muted" }));
+            // A four-shade LCD can't color the nearly-out state, so Pocket spells it out.
+            const low = this._gb() && level(left) === "crit" ? " LOW" : "";
             line.add(new St.Label({
-                text: `${Math.round(left)}%`,
+                text: `${Math.round(left)}%${low}`,
                 style_class: `needle-pct needle-level-${level(left)}`,
             }), { expand: true });
             if (w.resets_at) line.add(new St.Label({ text: duration(w.resets_at - now()), style_class: "needle-reset needle-muted" }));
@@ -439,6 +465,7 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
     _bar(frac, lvl) {
         if (this._retro()) return this._textBar(frac, lvl);
+        if (this._gb()) return this._cellBar(frac, lvl);
         const track = new St.Widget({ style_class: "needle-track", layout_manager: new Clutter.FixedLayout() });
         track.set_x_align(Clutter.ActorAlign.START);
         const px = Math.max(0, Math.min(1, frac));
@@ -457,6 +484,17 @@ class PineNeedleDesklet extends Desklet.Desklet {
         const filled = Math.round(total * Math.max(0, Math.min(1, frac)));
         const cells = "█".repeat(filled) + "░".repeat(total - filled);
         return new St.Label({ text: `[${cells}]`, style_class: `needle-textbar needle-level-${lvl}` });
+    }
+
+    // Pocket gauge: a row of square LCD pixels, darker as the level gets worse.
+    _cellBar(frac, lvl) {
+        const total = GB_CELLS[this._orientationName()];
+        const filled = Math.round(total * Math.max(0, Math.min(1, frac)));
+        const row = new St.BoxLayout({ style_class: "needle-gb-cells" });
+        for (let i = 0; i < total; i++) {
+            row.add(new St.Widget({ style_class: i < filled ? `needle-gb-cell needle-gb-cell-${lvl}` : "needle-gb-cell" }));
+        }
+        return row;
     }
 
     _note(text, isError) {
@@ -478,6 +516,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
         return this._themeName() === "tv";
     }
 
+    _gb() {
+        return this._themeName() === "gb";
+    }
+
     _orientationName() {
         return this.orientation === "landscape" ? "landscape" : "portrait";
     }
@@ -488,7 +530,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
     _applyTheme() {
         if (!this._card) return;
-        const shape = this._landscape() ? " needle-landscape" : "";
+        // Pocket's landscape tweaks get their own class: St can't match two classes on one node.
+        const shape = this._landscape() ? ` needle-landscape${this._gb() ? " needle-gb-landscape" : ""}` : "";
         this._card.set_style_class_name(`needle-desklet needle-theme-${this._themeName()}${shape}`);
         this._bezel.visible = this._retro();
         const tv = this._tv();
@@ -501,6 +544,107 @@ class PineNeedleDesklet extends Desklet.Desklet {
         const knobLayout = tv ? this._orientationName() : null;
         if (knobLayout && knobLayout !== this._controlsShape) this._buildControls();
         this._controlsShape = knobLayout;
+
+        const gb = this._gb();
+        this._frameTop.visible = gb;
+        this._gbLeft.visible = gb && this._landscape();
+        this._gbRight.visible = gb && this._landscape();
+        this._gbDeck.visible = gb && !this._landscape();
+        if (gb) this._body.vertical = !this._landscape();
+        const padLayout = gb ? this._orientationName() : null;
+        if (padLayout && padLayout !== this._gbShape) this._buildPad();
+        this._gbShape = padLayout;
+    }
+
+    // Pocket controls. A refreshes the card; the rest are just for looks.
+    _buildPad() {
+        for (const box of [this._gbLeft, this._gbRight, this._gbDeck]) box.destroy_all_children();
+        const side = this._landscape();
+
+        const ab = new St.BoxLayout({ style_class: "needle-gb-ab" });
+        ab.add(this._gbButton("B", false));
+        ab.add(this._gbButton("A", true));
+
+        const menu = new St.BoxLayout({ vertical: side, style_class: "needle-gb-menu" });
+        for (const name of ["SELECT", "START"]) {
+            const key = new St.BoxLayout({ vertical: true, style_class: "needle-gb-menu-key" });
+            key.add(new St.Widget({ style_class: "needle-gb-pill" }), { x_fill: false, x_align: St.Align.MIDDLE });
+            key.add(new St.Label({ text: name, style_class: "needle-gb-key-label" }), { x_fill: false, x_align: St.Align.MIDDLE });
+            menu.add(key);
+        }
+
+        const speaker = new St.DrawingArea({ width: side ? 40 : 52, height: side ? 26 : 34 });
+        speaker.connect("repaint", (area) => this._drawSpeaker(area));
+
+        if (side) {
+            this._gbLeft.add(this._dpad(), { x_fill: false, x_align: St.Align.MIDDLE });
+            this._gbLeft.add(menu, { x_fill: false, x_align: St.Align.MIDDLE });
+            this._gbRight.add(ab, { x_fill: false, x_align: St.Align.MIDDLE });
+            this._gbRight.add(speaker, { x_fill: false, x_align: St.Align.MIDDLE });
+            return;
+        }
+
+        const brand = new St.BoxLayout({ style_class: "needle-gb-brand" });
+        brand.add(new St.Label({ text: SIGNATURE, style_class: "needle-gb-brand-name" }));
+        brand.add(new St.Label({ text: "POCKET", style_class: "needle-gb-brand-model", y_align: Clutter.ActorAlign.END }));
+        this._gbDeck.add(brand);
+
+        const pads = new St.BoxLayout({ style_class: "needle-gb-pads" });
+        pads.add(this._dpad(), { y_fill: false, y_align: St.Align.MIDDLE });
+        pads.add(new St.Widget(), { expand: true });
+        pads.add(ab);
+        this._gbDeck.add(pads);
+
+        const bottom = new St.BoxLayout({ style_class: "needle-gb-bottom" });
+        bottom.add(new St.Widget(), { expand: true });
+        bottom.add(menu, { y_fill: false, y_align: St.Align.MIDDLE });
+        bottom.add(new St.Widget(), { expand: true });
+        bottom.add(speaker);
+        this._gbDeck.add(bottom);
+    }
+
+    // A plus-shaped D-pad from a 3x3 grid of squares.
+    _dpad() {
+        const pad = new St.BoxLayout({ vertical: true, style_class: "needle-gb-dpad" });
+        for (const row of [[0, 1, 0], [1, 1, 1], [0, 1, 0]]) {
+            const line = new St.BoxLayout();
+            for (const on of row) line.add(new St.Widget({ style_class: on ? "needle-gb-dpad-arm" : "needle-gb-dpad-gap" }));
+            pad.add(line);
+        }
+        return pad;
+    }
+
+    _gbButton(name, clickable) {
+        const key = new St.BoxLayout({ vertical: true, style_class: `needle-gb-key ${clickable ? "needle-gb-key-high" : "needle-gb-key-low"}` });
+        const button = new St.Button({
+            style_class: `needle-gb-button${clickable ? " needle-gb-button-live" : ""}`,
+            reactive: clickable, can_focus: clickable, track_hover: clickable,
+        });
+        if (clickable) {
+            button.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
+            new Tooltips.Tooltip(button, _("Press A to refresh now"));
+        }
+        key.add(button, { x_fill: false, x_align: St.Align.MIDDLE });
+        key.add(new St.Label({ text: name, style_class: "needle-gb-key-label" }), { x_fill: false, x_align: St.Align.MIDDLE });
+        return key;
+    }
+
+    // Six slanted speaker slots in the bottom corner.
+    _drawSpeaker(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.setLineWidth(3);
+        cr.setSourceRGBA(0.42, 0.42, 0.45, 1);
+        const slant = h * 0.55;
+        const step = (w - slant - 4) / 5;
+        for (let i = 0; i < 6; i++) {
+            const x = 2 + i * step;
+            cr.moveTo(x, h - 2);
+            cr.lineTo(x + slant, 2);
+            cr.stroke();
+        }
+        cr.$dispose();
     }
 
     // Tube TV control panel: channel and volume knobs plus speaker slots. The channel
