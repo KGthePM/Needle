@@ -30,7 +30,7 @@ const STALE_AGE = 3600;           // snapshot older than 1h dims the card
 
 const LEVEL_FILL = { ok: "needle-fill-ok", warn: "needle-fill-warn", crit: "needle-fill-crit" };
 
-const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv", "gb"];
+const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv", "gb", "xeno"];
 const RETRO_CELLS = { portrait: 24, landscape: 20 }; // character cells in a Retro CRT text gauge
 const BAR_WIDTH = { portrait: 300, landscape: 240 };  // gauge fill width at 100%; mirrors the CSS widths
 // Tube TV: the cabinet and screen frame eat into the card, so the screen is narrower.
@@ -38,6 +38,22 @@ const TV_BAR_WIDTH = { portrait: 266, landscape: 208 };
 const TV_ANTENNA_HEIGHT = 36; // px of rabbit ears above the cabinet; keep the card small
 // Pocket handheld: gauges are rows of LCD pixel cells (8px + 2px gap) sized to the screen.
 const GB_CELLS = { portrait: 26, landscape: 18 };
+// Xeno: gauges are rows of energy cells (11px + 3px gap); lit cells are what's left.
+const XENO_CELLS = { portrait: 20, landscape: 14 };
+const XENO_CREST_HEIGHT = 14; // px of ribcage over the screen
+// Life-sign heartbeat, beats per minute by the worst level on the card.
+const XENO_BPM = { ok: 56, warn: 80, crit: 120 };
+// Made-up alien glyphs in a unit box: [l x1 y1 x2 y2] line, [a cx cy r from to] arc, [d cx cy] dot.
+const XENO_GLYPHS = [
+    [["l", 0.5, 0, 0.5, 1], ["a", 0.5, 0.3, 0.3, Math.PI, 2 * Math.PI]],
+    [["l", 0.1, 0.2, 0.9, 0.2], ["l", 0.5, 0.2, 0.2, 1], ["d", 0.75, 0.7]],
+    [["a", 0.5, 0.5, 0.4, 0.4, 2 * Math.PI - 0.4], ["l", 0.5, 0.1, 0.5, 0.9]],
+    [["l", 0.2, 0, 0.2, 1], ["l", 0.2, 0.5, 0.85, 0.15], ["l", 0.2, 0.5, 0.85, 0.85]],
+    [["a", 0.5, 0.75, 0.3, Math.PI, 2 * Math.PI], ["d", 0.5, 0.2], ["l", 0.2, 0.75, 0.8, 0.75]],
+    [["l", 0.15, 0.1, 0.85, 0.9], ["l", 0.85, 0.1, 0.5, 0.5], ["a", 0.3, 0.8, 0.15, 0, 2 * Math.PI]],
+    [["l", 0.3, 0, 0.3, 0.7], ["l", 0.7, 0.3, 0.7, 1], ["l", 0.3, 0.7, 0.7, 0.3]],
+    [["a", 0.5, 0.35, 0.3, 0, Math.PI], ["l", 0.5, 0.65, 0.5, 1], ["d", 0.2, 0.15], ["d", 0.8, 0.15]],
+];
 
 const now = () => Date.now() / 1000;
 
@@ -119,6 +135,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._lastLiveAt = 0;
         this._pollId = 0;
         this._tickId = 0;
+        this._beatId = 0;
+        this._bulb = null;
+        this._stale = false;
+        this._xenoLevel = "ok";
 
         this.setHeader(_("PineNeedle"));
         this.setContent(this._buildCard());
@@ -139,6 +159,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._pollId = 0;
         if (this._tickId) GLib.source_remove(this._tickId);
         this._tickId = 0;
+        if (this._beatId) GLib.source_remove(this._beatId);
+        this._beatId = 0;
         if (this.settings) this.settings.finalize();
     }
 
@@ -247,6 +269,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._antenna = new St.DrawingArea({ height: TV_ANTENNA_HEIGHT });
         this._antenna.connect("repaint", (area) => this._drawAntenna(area));
         this._card.add(this._antenna, { x_fill: true });
+        // Xeno's ribcage crest over the screen.
+        this._xenoCrest = new St.DrawingArea({ height: XENO_CREST_HEIGHT });
+        this._xenoCrest.connect("repaint", (area) => this._drawCrest(area));
+        this._card.add(this._xenoCrest, { x_fill: true });
         // The body holds the screen, plus the TV's knob panel. In every theme but Tube TV
         // it's an unstyled box and the controls are hidden, so the card looks as before.
         this._body = new St.BoxLayout({ vertical: true, style_class: "needle-body" });
@@ -255,6 +281,9 @@ class PineNeedleDesklet extends Desklet.Desklet {
         // Pocket's side controls flank the screen in landscape, like a wide-body handheld.
         this._gbLeft = new St.BoxLayout({ vertical: true, style_class: "needle-gb-side" });
         this._body.add(this._gbLeft, { y_fill: false, y_align: St.Align.MIDDLE });
+        // Xeno's side pods in landscape: life-sign bulb and spine left, glyph column right.
+        this._xenoLeft = new St.BoxLayout({ vertical: true, style_class: "needle-xeno-pod-left" });
+        this._body.add(this._xenoLeft, { y_fill: false, y_align: St.Align.MIDDLE });
         // The frame is the handheld's dark screen bezel with its power LED; a plain box elsewhere.
         this._frame = new St.BoxLayout({ vertical: true, style_class: "needle-frame" });
         this._frameTop = new St.BoxLayout({ style_class: "needle-gb-frame-top" });
@@ -269,10 +298,15 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._body.add(this._controls);
         this._gbRight = new St.BoxLayout({ vertical: true, style_class: "needle-gb-side" });
         this._body.add(this._gbRight, { y_fill: false, y_align: St.Align.MIDDLE });
+        this._xenoRight = new St.BoxLayout({ vertical: true, style_class: "needle-xeno-pod-right" });
+        this._body.add(this._xenoRight, { y_fill: false, y_align: St.Align.MIDDLE });
         this._card.add(this._body);
         // Pocket's lower half in portrait: wordmark, D-pad, A/B, Start/Select and speaker.
         this._gbDeck = new St.BoxLayout({ vertical: true, style_class: "needle-gb-deck" });
         this._card.add(this._gbDeck);
+        // Xeno's deck under the screen in portrait: life-sign bulb, wordmark, glyph strip.
+        this._xenoDeck = new St.BoxLayout({ style_class: "needle-xeno-deck" });
+        this._card.add(this._xenoDeck);
         // Monitor chin under the screen: badge + power LED. Retro CRT only.
         this._bezel = new St.BoxLayout({ style_class: "needle-bezel" });
         this._bezel.add(new St.Label({ text: SIGNATURE.toUpperCase(), style_class: "needle-bezel-badge" }), { expand: true });
@@ -294,15 +328,15 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._applyTheme();
 
         const header = new St.BoxLayout({ style_class: "needle-head" });
-        const title = this._retro() ? `${SIGNATURE.toUpperCase()} v${this._version} _` : SIGNATURE;
+        const title = this._retro() ? `${SIGNATURE.toUpperCase()} v${this._version} _` : this._xeno() ? SIGNATURE.toUpperCase() : SIGNATURE;
         header.add(new St.Label({ text: title, style_class: "needle-title" }));
         // Retro CRT already prints the version in its title; elsewhere it trails it, quieter.
         const version = !this._retro() && this._version ? `v${this._version}` : "";
         header.add(new St.Label({ text: version, style_class: "needle-version needle-muted", y_align: Clutter.ActorAlign.CENTER }), { expand: true });
         const refresh = new St.Button({ label: "↻", style_class: "needle-refresh-btn", can_focus: true, track_hover: true });
         refresh.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
-        // Tube TV refreshes from its channel knob, Pocket from its A button.
-        if (!this._tv() && !this._gb()) header.add(refresh);
+        // Tube TV refreshes from its channel knob, Pocket from its A button, Xeno from its life sign.
+        if (!this._tv() && !this._gb() && !this._xeno()) header.add(refresh);
         this._content.add(header);
 
         if (this._fatal) {
@@ -351,16 +385,21 @@ class PineNeedleDesklet extends Desklet.Desklet {
         const low = providers.some((p) => { const left = bindingLeft(p); return left !== null && level(left) === "crit"; });
         if (low) this._gbLed.add_style_class_name("needle-gb-led-low");
         else this._gbLed.remove_style_class_name("needle-gb-led-low");
+        // Xeno's heartbeat quickens with the worst level on the card.
+        const levels = providers.map(bindingLeft).filter((left) => left !== null).map(level);
+        this._xenoLevel = levels.indexOf("crit") !== -1 ? "crit" : levels.indexOf("warn") !== -1 ? "warn" : "ok";
 
         const hint = this._data && this._data.hint;
         if (hint) this._content.add(this._note(`${hintText(hint)}.`, false));
 
         this._content.add(this._footer(providers));
-        if (this._data && this._data.updated && now() - this._data.updated > STALE_AGE) {
+        this._stale = !!(this._data && this._data.updated && now() - this._data.updated > STALE_AGE);
+        if (this._stale) {
             this._card.add_style_class_name("needle-stale");
         } else {
             this._card.remove_style_class_name("needle-stale");
         }
+        this._syncHeartbeat();
     }
 
     // One provider block: letter + name once, then each window labeled underneath,
@@ -466,6 +505,7 @@ class PineNeedleDesklet extends Desklet.Desklet {
     _bar(frac, lvl) {
         if (this._retro()) return this._textBar(frac, lvl);
         if (this._gb()) return this._cellBar(frac, lvl);
+        if (this._xeno()) return this._energyBar(frac, lvl);
         const track = new St.Widget({ style_class: "needle-track", layout_manager: new Clutter.FixedLayout() });
         track.set_x_align(Clutter.ActorAlign.START);
         const px = Math.max(0, Math.min(1, frac));
@@ -497,6 +537,17 @@ class PineNeedleDesklet extends Desklet.Desklet {
         return row;
     }
 
+    // Xeno gauge: glowing energy cells for what's left, hotter in color as it runs low.
+    _energyBar(frac, lvl) {
+        const total = XENO_CELLS[this._orientationName()];
+        const lit = Math.round(total * Math.max(0, Math.min(1, frac)));
+        const row = new St.BoxLayout({ style_class: "needle-xeno-cells" });
+        for (let i = 0; i < total; i++) {
+            row.add(new St.Widget({ style_class: i < lit ? `needle-xeno-cell needle-xeno-cell-${lvl}` : "needle-xeno-cell" }));
+        }
+        return row;
+    }
+
     _note(text, isError) {
         const l = new St.Label({ text: text, style_class: isError ? "needle-error-note" : "needle-setup-hint needle-muted" });
         l.clutter_text.line_wrap = true;
@@ -520,6 +571,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
         return this._themeName() === "gb";
     }
 
+    _xeno() {
+        return this._themeName() === "xeno";
+    }
+
     _orientationName() {
         return this.orientation === "landscape" ? "landscape" : "portrait";
     }
@@ -531,7 +586,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
     _applyTheme() {
         if (!this._card) return;
         // Pocket's landscape tweaks get their own class: St can't match two classes on one node.
-        const shape = this._landscape() ? ` needle-landscape${this._gb() ? " needle-gb-landscape" : ""}` : "";
+        const extra = this._gb() ? " needle-gb-landscape" : this._xeno() ? " needle-xeno-landscape" : "";
+        const shape = this._landscape() ? ` needle-landscape${extra}` : "";
         this._card.set_style_class_name(`needle-desklet needle-theme-${this._themeName()}${shape}`);
         this._bezel.visible = this._retro();
         const tv = this._tv();
@@ -554,6 +610,174 @@ class PineNeedleDesklet extends Desklet.Desklet {
         const padLayout = gb ? this._orientationName() : null;
         if (padLayout && padLayout !== this._gbShape) this._buildPad();
         this._gbShape = padLayout;
+
+        const xeno = this._xeno();
+        this._xenoCrest.visible = xeno;
+        this._xenoLeft.visible = xeno && this._landscape();
+        this._xenoRight.visible = xeno && this._landscape();
+        this._xenoDeck.visible = xeno && !this._landscape();
+        if (xeno) this._body.vertical = !this._landscape();
+        const xenoLayout = xeno ? this._orientationName() : null;
+        if (xenoLayout && xenoLayout !== this._xenoShape) this._buildXeno();
+        this._xenoShape = xenoLayout;
+        this._syncHeartbeat();
+    }
+
+    // Xeno hardware. The life-sign bulb refreshes the card; ribs and glyphs are just for looks.
+    _buildXeno() {
+        for (const box of [this._xenoLeft, this._xenoRight, this._xenoDeck]) box.destroy_all_children();
+        const side = this._landscape();
+
+        this._bulb = new St.Button({ style_class: "needle-xeno-bulb", can_focus: true, track_hover: true });
+        this._bulb.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
+        new Tooltips.Tooltip(this._bulb, _("Touch the life sign to refresh now"));
+        this._paintBulb(false);
+
+        if (side) {
+            this._xenoLeft.add(this._bulb, { x_fill: false, x_align: St.Align.MIDDLE });
+            const spine = new St.DrawingArea({ width: 24, height: 84 });
+            spine.connect("repaint", (area) => this._drawSpine(area));
+            this._xenoLeft.add(spine, { x_fill: false, x_align: St.Align.MIDDLE });
+            this._xenoRight.add(this._glyphStrip(12, 124, true), { x_fill: false, x_align: St.Align.MIDDLE });
+            return;
+        }
+
+        this._xenoDeck.add(this._bulb, { y_fill: false, y_align: St.Align.MIDDLE });
+        const brand = new St.BoxLayout({ vertical: true, style_class: "needle-xeno-brand" });
+        brand.add(new St.Label({ text: SIGNATURE.toUpperCase(), style_class: "needle-xeno-brand-name" }));
+        brand.add(new St.Label({ text: "XENO-7 · LIFE SIGN", style_class: "needle-xeno-brand-model" }));
+        this._xenoDeck.add(brand, { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
+        this._xenoDeck.add(this._glyphStrip(100, 12, false), { y_fill: false, y_align: St.Align.MIDDLE });
+    }
+
+    _glyphStrip(width, height, vertical) {
+        const area = new St.DrawingArea({ width: width, height: height });
+        area.connect("repaint", (a) => this._drawGlyphs(a, vertical));
+        return area;
+    }
+
+    // The bulb's look: level color, bright on a beat and dim between, dark when flatlined.
+    _paintBulb(beat) {
+        if (!this._bulb) return;
+        const lvl = this._xenoLevel || "ok";
+        this._bulb.set_style_class_name(`needle-xeno-bulb needle-xeno-bulb-${lvl}${beat ? "-beat" : ""}`);
+    }
+
+    // Lub-dub: two quick flashes, then rest for the remainder of the beat. Only runs while
+    // Xeno is showing, and stops (flatlines) when the snapshot is stale.
+    _syncHeartbeat() {
+        const alive = this._xeno() && !this._stale && !!this._bulb;
+        if (alive && !this._beatId) this._beat(0);
+        if (!alive) this._stopHeartbeat();
+    }
+
+    _beat(step) {
+        const period = 60000 / XENO_BPM[this._xenoLevel || "ok"];
+        const pattern = [[true, 110], [false, 120], [true, 110], [false, Math.max(200, period - 340)]];
+        const [on, ms] = pattern[step];
+        this._paintBulb(on);
+        this._beatId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+            this._beatId = 0;
+            this._beat((step + 1) % pattern.length);
+            return false;
+        });
+    }
+
+    _stopHeartbeat() {
+        if (this._beatId) GLib.source_remove(this._beatId);
+        this._beatId = 0;
+        this._paintBulb(false);
+    }
+
+    // A ribcage arching over the screen: curved ribs fanning out from the middle,
+    // tallest at the center, with a faint teal vein along the base.
+    _drawCrest(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        const inset = 26, step = 9;
+        const count = Math.floor((w - 2 * inset) / step);
+        const x0 = (w - count * step) / 2;
+        for (let i = 0; i <= count; i++) {
+            const x = x0 + i * step;
+            const t = (x - x0) / (count * step);
+            const tall = (h - 3) * (0.3 + 0.7 * Math.sin(Math.PI * t));
+            const lean = (t - 0.5) * 6;
+            for (const [width, shade, dx] of [[4, 0.35, 0], [1.2, 0.85, -1]]) {
+                cr.setLineWidth(width);
+                cr.setSourceRGBA(0.3 * shade, shade, 0.82 * shade, 1);
+                cr.moveTo(x + dx, h);
+                cr.curveTo(x + dx, h - tall * 0.5, x + dx + lean, h - tall * 0.8, x + dx + lean, h - tall);
+                cr.stroke();
+            }
+        }
+        cr.setLineWidth(1);
+        cr.setSourceRGBA(0.3, 1, 0.82, 0.35);
+        cr.moveTo(inset, h - 0.5);
+        cr.lineTo(w - inset, h - 0.5);
+        cr.stroke();
+        cr.$dispose();
+    }
+
+    // Vertebrae down the landscape side pod: bowed ribs, widest in the middle.
+    _drawSpine(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        const step = 8;
+        const count = Math.floor((h - 6) / step);
+        for (let i = 0; i <= count; i++) {
+            const y = 3 + i * step;
+            const t = i / count;
+            const half = (w / 2 - 2) * (0.35 + 0.65 * Math.sin(Math.PI * t));
+            for (const [width, shade, dy] of [[4, 0.35, 0], [1.2, 0.85, -1]]) {
+                cr.setLineWidth(width);
+                cr.setSourceRGBA(0.3 * shade, shade, 0.82 * shade, 1);
+                cr.moveTo(w / 2 - half, y + dy);
+                cr.curveTo(w / 2 - half / 2, y + dy + 3, w / 2 + half / 2, y + dy + 3, w / 2 + half, y + dy);
+                cr.stroke();
+            }
+        }
+        cr.setLineWidth(1);
+        cr.setSourceRGBA(0.3, 1, 0.82, 0.35);
+        cr.moveTo(w / 2, 2);
+        cr.lineTo(w / 2, h - 2);
+        cr.stroke();
+        cr.$dispose();
+    }
+
+    // A row (or column) of the made-up alien glyphs, glowing teal.
+    _drawGlyphs(area, vertical) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        const gw = vertical ? w - 2 : 8, gh = vertical ? 10 : h - 2, gap = 5;
+        const count = Math.floor(((vertical ? h : w) + gap) / ((vertical ? gh : gw) + gap));
+        const order = [3, 0, 6, 1, 7, 4, 2, 5];
+        for (let i = 0; i < count; i++) {
+            const ox = vertical ? 1 : i * (gw + gap);
+            const oy = vertical ? i * (gh + gap) : 1;
+            const glyph = XENO_GLYPHS[order[i % order.length]];
+            for (const [width, alpha] of [[3, 0.18], [1.2, 0.85]]) {
+                cr.setLineWidth(width);
+                cr.setSourceRGBA(0.3, 1, 0.82, alpha);
+                for (const part of glyph) {
+                    if (part[0] === "l") {
+                        cr.moveTo(ox + part[1] * gw, oy + part[2] * gh);
+                        cr.lineTo(ox + part[3] * gw, oy + part[4] * gh);
+                        cr.stroke();
+                    } else if (part[0] === "a") {
+                        cr.newSubPath();
+                        cr.arc(ox + part[1] * gw, oy + part[2] * gh, part[3] * gw, part[4], part[5]);
+                        cr.stroke();
+                    } else {
+                        cr.arc(ox + part[1] * gw, oy + part[2] * gh, width / 2 + 0.4, 0, 2 * Math.PI);
+                        cr.fill();
+                    }
+                }
+            }
+        }
+        cr.$dispose();
     }
 
     // Pocket controls. A refreshes the card; the rest are just for looks.

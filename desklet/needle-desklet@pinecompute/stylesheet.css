@@ -412,3 +412,138 @@
   background-color: #85848c;
   border: 1px solid #6c6b72;
 }
+
+/* Xeno: an alien biomechanical computer. The card itself is invisible and holds a
+   Cairo ribcage crest over the screen; the screen is a teal-black glass with uneven,
+   organic corners and glowing teal type, and gauges are energy cells, lit for what's left like
+   every other theme (desklet.js XENO_CELLS mirrors the screen's inner width). The life-sign bulb
+   pulses like a heartbeat and refreshes the card. Portrait puts the bulb, wordmark and
+   glyph strip on a deck below the screen; landscape puts the bulb and spine in a left
+   pod and a glyph column on the right. */
+
+.needle-theme-xeno {
+  background-color: transparent;
+  border-width: 0;
+  padding: 0;
+  color: #4dffd2;
+  spacing: 6px;
+  font-family: monospace;
+}
+.needle-theme-xeno .needle-body { spacing: 10px; }
+
+.needle-theme-xeno .needle-screen {
+  background-gradient-direction: vertical;
+  background-gradient-start: #06201b;
+  background-gradient-end: #020a08;
+  border: 2px solid #1f7a65;
+  border-radius: 22px 8px 24px 8px;
+  padding: 10px 12px 8px;
+  box-shadow: 0 0 10px rgba(77, 255, 210, 0.28);
+  text-shadow: 0 0 5px rgba(77, 255, 210, 0.6);
+}
+.needle-theme-xeno .needle-column { width: 200px; }
+.needle-xeno-landscape .needle-window-label { min-width: 64px; }
+.needle-theme-xeno .needle-title { font-size: 0.95em; letter-spacing: 2px; }
+.needle-theme-xeno .needle-muted { color: #2a9c82; }
+.needle-theme-xeno .needle-tag {
+  background-color: rgba(77, 255, 210, 0.08);
+  color: #4dffd2;
+  border: 1px solid #1f7a65;
+  border-radius: 6px 2px 6px 2px;
+}
+.needle-theme-xeno .needle-error-note { color: #ff4d5e; }
+.needle-theme-xeno .needle-level-ok   { color: #a6ff4d; }
+.needle-theme-xeno .needle-level-warn { color: #ffbf3a; }
+.needle-theme-xeno .needle-level-crit { color: #ff4d5e; }
+
+/* energy cells: lit and glowing by level for what's left, dark for what's used */
+.needle-xeno-cells { spacing: 3px; padding: 1px 0; }
+.needle-xeno-cell {
+  width: 11px;
+  height: 9px;
+  border-radius: 3px 1px 3px 1px;
+  border: 1px solid rgba(77, 255, 210, 0.22);
+  background-color: rgba(77, 255, 210, 0.05);
+}
+.needle-xeno-cell-ok {
+  border-color: #c8ff8a;
+  background-gradient-direction: vertical;
+  background-gradient-start: #d4ff9a;
+  background-gradient-end: #7fe02e;
+  box-shadow: 0 0 4px rgba(166, 255, 77, 0.8);
+}
+.needle-xeno-cell-warn {
+  border-color: #ffd98a;
+  background-gradient-direction: vertical;
+  background-gradient-start: #ffe08f;
+  background-gradient-end: #f0a020;
+  box-shadow: 0 0 4px rgba(255, 191, 58, 0.85);
+}
+.needle-xeno-cell-crit {
+  border-color: #ff9aa4;
+  background-gradient-direction: vertical;
+  background-gradient-start: #ff9aa4;
+  background-gradient-end: #e0283c;
+  box-shadow: 0 0 5px rgba(255, 77, 94, 0.9);
+}
+
+/* the deck under the screen (portrait) and the side pods (landscape) */
+/* the deck gets its own dark glass so the wordmark and glyphs read on any wallpaper */
+.needle-xeno-deck {
+  background-gradient-direction: vertical;
+  background-gradient-start: #06201b;
+  background-gradient-end: #020a08;
+  border: 1px solid #1f7a65;
+  border-radius: 8px 18px 8px 20px;
+  padding: 6px 12px;
+  spacing: 10px;
+  box-shadow: 0 0 6px rgba(77, 255, 210, 0.2);
+}
+.needle-xeno-brand { spacing: 1px; }
+.needle-xeno-brand-name {
+  color: #4dffd2;
+  font-size: 0.7em;
+  font-weight: bold;
+  letter-spacing: 3px;
+  text-shadow: 0 0 4px rgba(77, 255, 210, 0.5);
+}
+.needle-xeno-brand-model {
+  color: #2a7f6c;
+  font-size: 0.55em;
+  letter-spacing: 2px;
+}
+.needle-xeno-pod-left { width: 40px; spacing: 10px; }
+.needle-xeno-pod-right { width: 22px; }
+
+/* the life-sign bulb: dim between beats, bright on a beat, colored by the worst level */
+.needle-xeno-bulb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  border: 1px solid #0f4a3d;
+  background-gradient-direction: radial;
+  background-gradient-start: #1f6f5c;
+  background-gradient-end: #0a2a22;
+}
+.needle-xeno-bulb-ok-beat {
+  border-color: #8affe4;
+  background-gradient-start: #e6fff8;
+  background-gradient-end: #22c99d;
+  box-shadow: 0 0 10px rgba(77, 255, 210, 0.9);
+}
+.needle-xeno-bulb-warn { background-gradient-start: #6f5520; background-gradient-end: #2a1f0a; border-color: #4a3a12; }
+.needle-xeno-bulb-warn-beat {
+  border-color: #ffd98a;
+  background-gradient-start: #fff3d6;
+  background-gradient-end: #f0a020;
+  box-shadow: 0 0 10px rgba(255, 191, 58, 0.9);
+}
+.needle-xeno-bulb-crit { background-gradient-start: #6f2028; background-gradient-end: #2a0a0e; border-color: #4a121a; }
+.needle-xeno-bulb-crit-beat {
+  border-color: #ff9aa4;
+  background-gradient-start: #ffe0e4;
+  background-gradient-end: #e0283c;
+  box-shadow: 0 0 12px rgba(255, 77, 94, 0.95);
+}
+.needle-xeno-bulb:hover,
+.needle-xeno-bulb:focus { border-color: #e6fff8; }
