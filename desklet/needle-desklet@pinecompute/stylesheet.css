@@ -23,6 +23,8 @@
   font-size: 1em;
 }
 
+.needle-version { font-size: 0.75em; }
+
 .needle-refresh-btn {
   padding: 2px 7px;
   border-radius: 5px;
@@ -202,4 +204,78 @@
   color: #2ee85c;
   font-size: 0.7em;
   text-shadow: 0 0 4px rgba(46, 232, 92, 0.9);
+}
+
+/* Tube TV: the card itself is invisible and holds the rabbit-ear antenna (drawn in
+   desklet.js), a wood cabinet with a Midnight-blue tube screen and a knob panel,
+   and two little feet. Sizes are kept tight so it's no bigger than the other themes;
+   desklet.js TV_BAR_WIDTH mirrors the screen's inner width. */
+
+.needle-theme-tv {
+  background-color: transparent;
+  border-width: 0;
+  padding: 0;
+  color: #e8edf5;
+}
+.needle-theme-tv .needle-body {
+  background-gradient-direction: vertical;
+  background-gradient-start: #8a5a34;
+  background-gradient-end: #5e3a1f;
+  border: 2px solid #2b1b11;
+  border-radius: 14px;
+  padding: 10px;
+  spacing: 10px;
+}
+.needle-theme-tv .needle-screen {
+  background-gradient-direction: vertical;
+  background-gradient-start: #18222f;
+  background-gradient-end: #0a0e14;
+  border: 3px solid #14100c;
+  border-radius: 18px;
+  padding: 10px 12px 8px;
+}
+.needle-theme-tv .needle-column { width: 208px; }
+.needle-theme-tv .needle-muted { color: #8fa2bf; }
+.needle-theme-tv .needle-track { background-color: #263650; }
+.needle-theme-tv .needle-tag { background-color: #1a2537; }
+.needle-theme-tv .needle-error-note { color: #ff667a; }
+
+.needle-tv-side { width: 36px; spacing: 14px; padding-top: 6px; }
+.needle-tv-strip { spacing: 10px; padding: 0 4px; }
+.needle-tv-knobs { spacing: 8px; }
+
+.needle-tv-knob {
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  border: 1px solid #2b1b11;
+  background-gradient-direction: vertical;
+  background-gradient-start: #e2dccf;
+  background-gradient-end: #8f877a;
+  padding-top: 2px;
+}
+.needle-tv-knob-live:hover,
+.needle-tv-knob-live:focus {
+  background-gradient-start: #f4efe4;
+  background-gradient-end: #a89f90;
+}
+.needle-tv-notch {
+  width: 2px;
+  height: 7px;
+  border-radius: 1px;
+  background-color: #2b1b11;
+}
+
+/* speaker slots: horizontal bars stacked beside the screen, vertical bars on the strip */
+.needle-tv-grille { spacing: 4px; }
+.needle-tv-slot { border-radius: 2px; background-color: #2b1b11; }
+.needle-tv-side .needle-tv-slot { width: 26px; height: 3px; }
+.needle-tv-strip .needle-tv-slot { width: 3px; height: 14px; }
+
+.needle-tv-legs { padding: 0 36px; }
+.needle-tv-leg {
+  width: 16px;
+  height: 6px;
+  border-radius: 0 0 3px 3px;
+  background-color: #2b1b11;
 }

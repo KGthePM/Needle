@@ -6,11 +6,13 @@ const Desklet = imports.ui.desklet;
 const Settings = imports.ui.settings;
 const Util = imports.misc.util;
 const ByteArray = imports.byteArray;
+const Tooltips = imports.ui.tooltips;
 const St = imports.gi.St;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Clutter = imports.gi.Clutter;
 const Pango = imports.gi.Pango;
+const Cairo = imports.cairo;
 
 const UUID = "needle-desklet@pinecompute";
 const HOME = GLib.get_home_dir();
@@ -28,9 +30,12 @@ const STALE_AGE = 3600;           // snapshot older than 1h dims the card
 
 const LEVEL_FILL = { ok: "needle-fill-ok", warn: "needle-fill-warn", crit: "needle-fill-crit" };
 
-const THEMES = ["midnight", "forest", "paper", "plum", "retro"];
+const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv"];
 const RETRO_CELLS = { portrait: 24, landscape: 20 }; // character cells in a Retro CRT text gauge
 const BAR_WIDTH = { portrait: 300, landscape: 240 };  // gauge fill width at 100%; mirrors the CSS widths
+// Tube TV: the cabinet and screen frame eat into the card, so the screen is narrower.
+const TV_BAR_WIDTH = { portrait: 266, landscape: 208 };
+const TV_ANTENNA_HEIGHT = 36; // px of rabbit ears above the cabinet; keep the card small
 
 const now = () => Date.now() / 1000;
 
@@ -236,14 +241,30 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
     _buildCard() {
         this._card = new St.BoxLayout({ vertical: true, style_class: "needle-desklet" });
-        // The "screen" only has a look of its own in the Retro CRT theme; elsewhere it's a plain box.
+        // Rabbit-ear antenna over the cabinet. Tube TV only.
+        this._antenna = new St.DrawingArea({ height: TV_ANTENNA_HEIGHT });
+        this._antenna.connect("repaint", (area) => this._drawAntenna(area));
+        this._card.add(this._antenna, { x_fill: true });
+        // The body holds the screen, plus the TV's knob panel. In every theme but Tube TV
+        // it's an unstyled box and the controls are hidden, so the card looks as before.
+        this._body = new St.BoxLayout({ vertical: true, style_class: "needle-body" });
+        // The "screen" only has a look of its own in the Retro CRT and Tube TV themes; elsewhere it's a plain box.
         this._content = new St.BoxLayout({ vertical: true, style_class: "needle-screen" });
-        this._card.add(this._content);
+        this._body.add(this._content, { expand: true });
+        this._controls = new St.BoxLayout({ style_class: "needle-tv-controls" });
+        this._body.add(this._controls);
+        this._card.add(this._body);
         // Monitor chin under the screen: badge + power LED. Retro CRT only.
         this._bezel = new St.BoxLayout({ style_class: "needle-bezel" });
         this._bezel.add(new St.Label({ text: SIGNATURE.toUpperCase(), style_class: "needle-bezel-badge" }), { expand: true });
         this._bezel.add(new St.Label({ text: "●", style_class: "needle-bezel-led" }));
         this._card.add(this._bezel);
+        // Two stubby feet under the cabinet. Tube TV only.
+        this._legs = new St.BoxLayout({ style_class: "needle-tv-legs" });
+        this._legs.add(new St.Widget({ style_class: "needle-tv-leg" }));
+        this._legs.add(new St.Widget(), { expand: true });
+        this._legs.add(new St.Widget({ style_class: "needle-tv-leg" }));
+        this._card.add(this._legs);
         this._render();
         return this._card;
     }
@@ -255,10 +276,14 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
         const header = new St.BoxLayout({ style_class: "needle-head" });
         const title = this._retro() ? `${SIGNATURE.toUpperCase()} v${this._version} _` : SIGNATURE;
-        header.add(new St.Label({ text: title, style_class: "needle-title" }), { expand: true });
+        header.add(new St.Label({ text: title, style_class: "needle-title" }));
+        // Retro CRT already prints the version in its title; elsewhere it trails it, quieter.
+        const version = !this._retro() && this._version ? `v${this._version}` : "";
+        header.add(new St.Label({ text: version, style_class: "needle-version needle-muted", y_align: Clutter.ActorAlign.CENTER }), { expand: true });
         const refresh = new St.Button({ label: "↻", style_class: "needle-refresh-btn", can_focus: true, track_hover: true });
         refresh.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
-        header.add(refresh);
+        // Tube TV refreshes from its channel knob instead.
+        if (!this._tv()) header.add(refresh);
         this._content.add(header);
 
         if (this._fatal) {
@@ -418,7 +443,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
         track.set_x_align(Clutter.ActorAlign.START);
         const px = Math.max(0, Math.min(1, frac));
         const fill = new St.Widget({ style_class: `needle-fill ${LEVEL_FILL[lvl]}` });
-        fill.set_size(Math.round(BAR_WIDTH[this._orientationName()] * px), 4);
+        const width = (this._tv() ? TV_BAR_WIDTH : BAR_WIDTH)[this._orientationName()];
+        fill.set_size(Math.round(width * px), 4);
         fill.set_position(0, 0);
         track.add_child(fill);
         track.set_height(4);
@@ -448,6 +474,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
         return this._themeName() === "retro";
     }
 
+    _tv() {
+        return this._themeName() === "tv";
+    }
+
     _orientationName() {
         return this.orientation === "landscape" ? "landscape" : "portrait";
     }
@@ -461,6 +491,84 @@ class PineNeedleDesklet extends Desklet.Desklet {
         const shape = this._landscape() ? " needle-landscape" : "";
         this._card.set_style_class_name(`needle-desklet needle-theme-${this._themeName()}${shape}`);
         this._bezel.visible = this._retro();
+        const tv = this._tv();
+        this._antenna.visible = tv;
+        this._controls.visible = tv;
+        this._legs.visible = tv;
+        // Landscape puts the knobs beside the screen; portrait puts them on a strip below it.
+        this._body.vertical = !(tv && this._landscape());
+        // Rebuild the knobs only when their layout changes, not on every 30s redraw.
+        const knobLayout = tv ? this._orientationName() : null;
+        if (knobLayout && knobLayout !== this._controlsShape) this._buildControls();
+        this._controlsShape = knobLayout;
+    }
+
+    // Tube TV control panel: channel and volume knobs plus speaker slots. The channel
+    // knob is the refresh button; volume is just for looks.
+    _buildControls() {
+        this._controls.destroy_all_children();
+        const side = this._landscape();
+        this._controls.vertical = side;
+        this._controls.set_style_class_name(`needle-tv-controls ${side ? "needle-tv-side" : "needle-tv-strip"}`);
+
+        const channel = this._knob(true);
+        channel.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
+        new Tooltips.Tooltip(channel, _("Change the channel (refresh now)"));
+        const knobs = new St.BoxLayout({ vertical: side, style_class: "needle-tv-knobs" });
+        knobs.add(channel);
+        knobs.add(this._knob(false));
+
+        const grille = new St.BoxLayout({ vertical: side, style_class: "needle-tv-grille" });
+        for (let i = 0; i < (side ? 5 : 9); i++) grille.add(new St.Widget({ style_class: "needle-tv-slot" }));
+
+        if (side) {
+            this._controls.add(knobs, { x_fill: false, x_align: St.Align.MIDDLE });
+            this._controls.add(grille, { x_fill: false, x_align: St.Align.MIDDLE });
+        } else {
+            this._controls.add(grille, { expand: true, y_fill: false, y_align: St.Align.MIDDLE });
+            this._controls.add(knobs);
+        }
+    }
+
+    _knob(clickable) {
+        const knob = new St.Button({
+            style_class: `needle-tv-knob${clickable ? " needle-tv-knob-live" : ""}`,
+            reactive: clickable, can_focus: clickable, track_hover: clickable,
+            x_align: St.Align.MIDDLE, y_align: St.Align.START, x_fill: false, y_fill: false,
+        });
+        // the pointer notch, so it reads as a dial and not a button
+        knob.set_child(new St.Widget({ style_class: "needle-tv-notch" }));
+        return knob;
+    }
+
+    // Two chrome rods in a lopsided V out of a little dome that sits on the cabinet.
+    _drawAntenna(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        const cx = w / 2;
+        cr.setLineCap(Cairo.LineCap.ROUND);
+
+        cr.setSourceRGBA(0.72, 0.75, 0.79, 1);
+        cr.setLineWidth(2);
+        const tips = [[cx - 46, 4], [cx + 40, 2]];
+        for (const [x, y] of tips) {
+            cr.moveTo(cx, h - 6);
+            cr.lineTo(x, y);
+            cr.stroke();
+        }
+        for (const [x, y] of tips) {
+            cr.arc(x, y + 1, 2.5, 0, 2 * Math.PI);
+            cr.fill();
+        }
+
+        cr.setSourceRGBA(0.17, 0.11, 0.07, 1); // same dark brown as the cabinet edge
+        cr.save();
+        cr.translate(cx, h);
+        cr.scale(16, 9);
+        cr.arc(0, 0, 1, Math.PI, 2 * Math.PI);
+        cr.restore();
+        cr.fill();
+        cr.$dispose();
     }
 }
 

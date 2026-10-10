@@ -17,7 +17,7 @@
   "theme": {
     "type": "combobox",
     "default": "midnight",
-    "options": { "Midnight": "midnight", "Forest": "forest", "Paper": "paper", "Plum": "plum", "Retro CRT": "retro" },
+    "options": { "Midnight": "midnight", "Forest": "forest", "Paper": "paper", "Plum": "plum", "Retro CRT": "retro", "Tube TV": "tv" },
     "description": "Theme"
   },
   "show-errored": {

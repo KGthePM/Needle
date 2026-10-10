@@ -2,8 +2,9 @@
   "uuid": "needle-desklet@pinecompute",
   "name": "PineNeedle",
   "description": "Claude, ChatGPT/Codex, z.ai and OpenRouter limits on your desktop — the same gauges as the Needle panel applet, as an on-desk card",
-  "version": "1.15.0",
+  "version": "1.16.0",
   "max-instances": "10",
   "author": "KGthePM",
-  "website": "https://github.com/KGthePM/Needle"
+  "website": "https://github.com/KGthePM/Needle",
+  "prevent-decorations": true
 }
