@@ -145,6 +145,7 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
         this.settings = new Settings.DeskletSettings(this, UUID, deskletId);
         this.settings.bind("layout", "layout", () => this._render());
+        this.settings.bind("compact-window", "compactWindow", () => this._render());
         this.settings.bind("orientation", "orientation", () => this._render());
         this.settings.bind("theme", "theme", () => this._render()); // retro swaps widgets, not just colors
         this.settings.bind("show-errored", "showErrored", () => this._render());
@@ -414,8 +415,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
         let windows = p.windows || [];
         if (!detailed) {
+            const chosen = windows.filter((w) => w.label === this.compactWindow);
             const pace = windows.filter((w) => PACE_WINDOWS.indexOf(w.label) !== -1);
-            windows = (pace.length ? pace : windows.slice()).sort((a, b) => (100 - a.used) - (100 - b.used)).slice(0, 1);
+            windows = chosen.length ? chosen.slice(0, 1)
+                : (pace.length ? pace : windows.slice()).sort((a, b) => (100 - a.used) - (100 - b.used)).slice(0, 1);
         }
         for (const w of windows) {
             const left = 100 - w.used;

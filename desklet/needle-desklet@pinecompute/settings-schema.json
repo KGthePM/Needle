@@ -5,7 +5,15 @@
     "default": "detailed",
     "options": { "Detailed": "detailed", "Compact": "compact" },
     "description": "Layout",
-    "tooltip": "Detailed shows every window per service; Compact shows one tightest gauge per service."
+    "tooltip": "Detailed shows every window per service; Compact shows one gauge per service."
+  },
+  "compact-window": {
+    "type": "combobox",
+    "default": "5-hour",
+    "options": { "5-hour": "5-hour", "Weekly": "Weekly", "Tightest": "tightest" },
+    "description": "Compact gauge",
+    "tooltip": "Which window Compact shows. Tightest picks whichever has the least left. Services without the chosen window fall back to their tightest.",
+    "dependency": "layout=compact"
   },
   "orientation": {
     "type": "combobox",
