@@ -547,3 +547,99 @@
 }
 .needle-xeno-bulb:hover,
 .needle-xeno-bulb:focus { border-color: #e6fff8; }
+
+/* Plasma TV: a mid-2000s flat panel. The card itself is invisible and holds a glossy
+   piano-black bezel (the body, with the chin below it), a pedestal stand drawn in
+   desklet.js, and a square-cornered widescreen panel whose gauges are on-screen-display
+   segments like an old volume bar (desklet.js HDTV_SEGMENTS mirrors the screen's inner
+   width). Portrait puts a silver speaker strip on the chin; landscape moves the speakers
+   beside the screen. The chin's channel button refreshes the card, and its blue power LED
+   drops to red standby when the snapshot goes stale. */
+
+.needle-theme-hdtv {
+  background-color: transparent;
+  border-width: 0;
+  padding: 0;
+  color: #eef2f8;
+}
+.needle-theme-hdtv .needle-body {
+  background-gradient-direction: vertical;
+  background-gradient-start: #2c2e33;
+  background-gradient-end: #141518;
+  border: 1px solid #4a4d55;
+  border-bottom-width: 0;
+  border-radius: 8px 8px 0 0;
+  padding: 10px 10px 8px;
+  spacing: 10px;
+}
+.needle-theme-hdtv .needle-screen {
+  background-gradient-direction: vertical;
+  background-gradient-start: #131a28;
+  background-gradient-end: #05070b;
+  border: 1px solid #000000;
+  border-radius: 2px;
+  padding: 10px 12px 8px;
+}
+.needle-theme-hdtv .needle-column { width: 194px; }
+.needle-theme-hdtv .needle-muted { color: #8d9bb0; }
+.needle-theme-hdtv .needle-tag { background-color: #1b2230; }
+.needle-theme-hdtv .needle-error-note { color: #ff667a; }
+
+/* volume-bar segments: lit by level for what's left, faint for what's used */
+.needle-hdtv-segs { spacing: 2px; padding: 1px 0; }
+.needle-hdtv-seg {
+  width: 4px;
+  height: 9px;
+  background-color: rgba(238, 242, 248, 0.09);
+}
+.needle-hdtv-seg-ok   { background-color: #34c58a; }
+.needle-hdtv-seg-warn { background-color: #e9a93a; }
+.needle-hdtv-seg-crit { background-color: #f06b72; }
+
+.needle-hdtv-speaker { width: 30px; }
+.needle-hdtv-strip { height: 9px; }
+
+.needle-hdtv-chin {
+  background-gradient-direction: vertical;
+  background-gradient-start: #141518;
+  background-gradient-end: #0b0c0e;
+  border: 1px solid #4a4d55;
+  border-top-width: 0;
+  border-radius: 0 0 8px 8px;
+  padding: 0 10px 6px;
+  spacing: 5px;
+}
+.needle-hdtv-group { width: 66px; spacing: 6px; }
+.needle-hdtv-hd {
+  color: #b8bcc6;
+  font-size: 0.5em;
+  font-weight: bold;
+  letter-spacing: 1px;
+  border: 1px solid #6a6e78;
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+.needle-hdtv-brand {
+  color: #c9ccd3;
+  font-size: 0.7em;
+  font-weight: bold;
+  letter-spacing: 3px;
+}
+.needle-hdtv-button {
+  color: #9a9ea8;
+  font-size: 0.5em;
+  font-weight: bold;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid #3a3d44;
+  background-color: #1c1d21;
+}
+.needle-hdtv-button:hover,
+.needle-hdtv-button:focus { color: #e8ebf0; border-color: #6a6e78; }
+.needle-hdtv-button:active { background-color: #101114; }
+.needle-hdtv-led {
+  color: #3d8bff;
+  font-size: 0.6em;
+  text-shadow: 0 0 5px rgba(61, 139, 255, 0.95);
+}
+.needle-hdtv-led-standby { color: #ff3b30; text-shadow: 0 0 4px rgba(255, 59, 48, 0.8); }

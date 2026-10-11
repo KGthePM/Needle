@@ -30,7 +30,7 @@ const STALE_AGE = 3600;           // snapshot older than 1h dims the card
 
 const LEVEL_FILL = { ok: "needle-fill-ok", warn: "needle-fill-warn", crit: "needle-fill-crit" };
 
-const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv", "gb", "xeno"];
+const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv", "gb", "xeno", "hdtv"];
 const RETRO_CELLS = { portrait: 24, landscape: 20 }; // character cells in a Retro CRT text gauge
 const BAR_WIDTH = { portrait: 300, landscape: 240 };  // gauge fill width at 100%; mirrors the CSS widths
 // Tube TV: the cabinet and screen frame eat into the card, so the screen is narrower.
@@ -54,6 +54,9 @@ const XENO_GLYPHS = [
     [["l", 0.3, 0, 0.3, 0.7], ["l", 0.7, 0.3, 0.7, 1], ["l", 0.3, 0.7, 0.7, 0.3]],
     [["a", 0.5, 0.35, 0.3, 0, Math.PI], ["l", 0.5, 0.65, 0.5, 1], ["d", 0.2, 0.15], ["d", 0.8, 0.15]],
 ];
+// Plasma TV: gauges are rows of on-screen-display segments (4px + 2px gap), like a 2000s volume bar.
+const HDTV_SEGMENTS = { portrait: 45, landscape: 32 };
+const HDTV_STAND_HEIGHT = 18; // px of pedestal under the bezel
 
 const now = () => Date.now() / 1000;
 
@@ -285,6 +288,9 @@ class PineNeedleDesklet extends Desklet.Desklet {
         // Xeno's side pods in landscape: life-sign bulb and spine left, glyph column right.
         this._xenoLeft = new St.BoxLayout({ vertical: true, style_class: "needle-xeno-pod-left" });
         this._body.add(this._xenoLeft, { y_fill: false, y_align: St.Align.MIDDLE });
+        // Plasma TV's speakers flank the screen in landscape; portrait moves them to a strip under it.
+        this._hdtvLeft = this._hdtvGrille("needle-hdtv-speaker");
+        this._body.add(this._hdtvLeft);
         // The frame is the handheld's dark screen bezel with its power LED; a plain box elsewhere.
         this._frame = new St.BoxLayout({ vertical: true, style_class: "needle-frame" });
         this._frameTop = new St.BoxLayout({ style_class: "needle-gb-frame-top" });
@@ -301,7 +307,15 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._body.add(this._gbRight, { y_fill: false, y_align: St.Align.MIDDLE });
         this._xenoRight = new St.BoxLayout({ vertical: true, style_class: "needle-xeno-pod-right" });
         this._body.add(this._xenoRight, { y_fill: false, y_align: St.Align.MIDDLE });
+        this._hdtvRight = this._hdtvGrille("needle-hdtv-speaker");
+        this._body.add(this._hdtvRight);
         this._card.add(this._body);
+        // Plasma TV's lower bezel: speaker strip (portrait), HD sticker, wordmark, channel button, power LED.
+        this._hdtvChin = new St.BoxLayout({ vertical: true, style_class: "needle-hdtv-chin" });
+        this._hdtvStrip = this._hdtvGrille("needle-hdtv-strip");
+        this._hdtvChin.add(this._hdtvStrip);
+        this._hdtvChin.add(this._buildHdtvBadges());
+        this._card.add(this._hdtvChin);
         // Pocket's lower half in portrait: wordmark, D-pad, A/B, Start/Select and speaker.
         this._gbDeck = new St.BoxLayout({ vertical: true, style_class: "needle-gb-deck" });
         this._card.add(this._gbDeck);
@@ -319,6 +333,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._legs.add(new St.Widget(), { expand: true });
         this._legs.add(new St.Widget({ style_class: "needle-tv-leg" }));
         this._card.add(this._legs);
+        // Pedestal stand under the plasma's bezel.
+        this._hdtvStand = new St.DrawingArea({ height: HDTV_STAND_HEIGHT });
+        this._hdtvStand.connect("repaint", (area) => this._drawStand(area));
+        this._card.add(this._hdtvStand, { x_fill: true });
         this._render();
         return this._card;
     }
@@ -336,8 +354,9 @@ class PineNeedleDesklet extends Desklet.Desklet {
         header.add(new St.Label({ text: version, style_class: "needle-version needle-muted", y_align: Clutter.ActorAlign.CENTER }), { expand: true });
         const refresh = new St.Button({ label: "↻", style_class: "needle-refresh-btn", can_focus: true, track_hover: true });
         refresh.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
-        // Tube TV refreshes from its channel knob, Pocket from its A button, Xeno from its life sign.
-        if (!this._tv() && !this._gb() && !this._xeno()) header.add(refresh);
+        // Tube TV refreshes from its channel knob, Pocket from its A button, Xeno from its life sign,
+        // Plasma TV from its channel button.
+        if (!this._tv() && !this._gb() && !this._xeno() && !this._hdtv()) header.add(refresh);
         this._content.add(header);
 
         if (this._fatal) {
@@ -397,8 +416,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._stale = !!(this._data && this._data.updated && now() - this._data.updated > STALE_AGE);
         if (this._stale) {
             this._card.add_style_class_name("needle-stale");
+            this._hdtvLed.add_style_class_name("needle-hdtv-led-standby");
         } else {
             this._card.remove_style_class_name("needle-stale");
+            this._hdtvLed.remove_style_class_name("needle-hdtv-led-standby");
         }
         this._syncHeartbeat();
     }
@@ -509,6 +530,7 @@ class PineNeedleDesklet extends Desklet.Desklet {
         if (this._retro()) return this._textBar(frac, lvl);
         if (this._gb()) return this._cellBar(frac, lvl);
         if (this._xeno()) return this._energyBar(frac, lvl);
+        if (this._hdtv()) return this._segmentBar(frac, lvl);
         const track = new St.Widget({ style_class: "needle-track", layout_manager: new Clutter.FixedLayout() });
         track.set_x_align(Clutter.ActorAlign.START);
         const px = Math.max(0, Math.min(1, frac));
@@ -551,6 +573,17 @@ class PineNeedleDesklet extends Desklet.Desklet {
         return row;
     }
 
+    // Plasma TV gauge: thin on-screen-display segments, like the volume bar on a 2000s TV.
+    _segmentBar(frac, lvl) {
+        const total = HDTV_SEGMENTS[this._orientationName()];
+        const lit = Math.round(total * Math.max(0, Math.min(1, frac)));
+        const row = new St.BoxLayout({ style_class: "needle-hdtv-segs" });
+        for (let i = 0; i < total; i++) {
+            row.add(new St.Widget({ style_class: i < lit ? `needle-hdtv-seg needle-hdtv-seg-${lvl}` : "needle-hdtv-seg" }));
+        }
+        return row;
+    }
+
     _note(text, isError) {
         const l = new St.Label({ text: text, style_class: isError ? "needle-error-note" : "needle-setup-hint needle-muted" });
         l.clutter_text.line_wrap = true;
@@ -576,6 +609,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
     _xeno() {
         return this._themeName() === "xeno";
+    }
+
+    _hdtv() {
+        return this._themeName() === "hdtv";
     }
 
     _orientationName() {
@@ -623,6 +660,14 @@ class PineNeedleDesklet extends Desklet.Desklet {
         const xenoLayout = xeno ? this._orientationName() : null;
         if (xenoLayout && xenoLayout !== this._xenoShape) this._buildXeno();
         this._xenoShape = xenoLayout;
+
+        const hdtv = this._hdtv();
+        this._hdtvLeft.visible = hdtv && this._landscape();
+        this._hdtvRight.visible = hdtv && this._landscape();
+        this._hdtvChin.visible = hdtv;
+        this._hdtvStrip.visible = hdtv && !this._landscape();
+        this._hdtvStand.visible = hdtv;
+        if (hdtv) this._body.vertical = !this._landscape();
         this._syncHeartbeat();
     }
 
@@ -780,6 +825,94 @@ class PineNeedleDesklet extends Desklet.Desklet {
                 }
             }
         }
+        cr.$dispose();
+    }
+
+    // Plasma TV chin: HD sticker on the left, wordmark centered, channel button and power LED
+    // on the right. The two side groups share a width so the wordmark stays centered.
+    _buildHdtvBadges() {
+        const row = new St.BoxLayout({ style_class: "needle-hdtv-badges" });
+        const left = new St.BoxLayout({ style_class: "needle-hdtv-group" });
+        left.add(new St.Label({ text: "HD READY", style_class: "needle-hdtv-hd" }), { y_fill: false, y_align: St.Align.MIDDLE });
+        row.add(left);
+        row.add(new St.Label({ text: SIGNATURE.toUpperCase(), style_class: "needle-hdtv-brand" }),
+            { expand: true, x_fill: false, x_align: St.Align.MIDDLE, y_fill: false, y_align: St.Align.MIDDLE });
+        const right = new St.BoxLayout({ style_class: "needle-hdtv-group" });
+        right.add(new St.Widget(), { expand: true });
+        const channel = new St.Button({ label: "CH ▲", style_class: "needle-hdtv-button", can_focus: true, track_hover: true });
+        channel.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
+        new Tooltips.Tooltip(channel, _("Channel up (refresh now)"));
+        right.add(channel, { y_fill: false, y_align: St.Align.MIDDLE });
+        this._hdtvLed = new St.Label({ text: "●", style_class: "needle-hdtv-led" });
+        right.add(this._hdtvLed, { y_fill: false, y_align: St.Align.MIDDLE });
+        row.add(right);
+        return row;
+    }
+
+    _hdtvGrille(styleClass) {
+        const area = new St.DrawingArea({ style_class: styleClass });
+        area.connect("repaint", (a) => this._drawGrille(a));
+        return area;
+    }
+
+    // Brushed-silver speaker mesh: a rounded panel shaded across its short side, with
+    // staggered rows of perforations.
+    _drawGrille(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        const r = Math.min(3, w / 2, h / 2);
+        cr.newSubPath();
+        cr.arc(w - r, r, r, -Math.PI / 2, 0);
+        cr.arc(w - r, h - r, r, 0, Math.PI / 2);
+        cr.arc(r, h - r, r, Math.PI / 2, Math.PI);
+        cr.arc(r, r, r, Math.PI, 1.5 * Math.PI);
+        cr.closePath();
+        const shade = w > h ? new Cairo.LinearGradient(0, 0, 0, h) : new Cairo.LinearGradient(0, 0, w, 0);
+        shade.addColorStopRGBA(0, 0.36, 0.38, 0.42, 1);
+        shade.addColorStopRGBA(0.5, 0.56, 0.58, 0.62, 1);
+        shade.addColorStopRGBA(1, 0.3, 0.31, 0.35, 1);
+        cr.setSource(shade);
+        cr.fill();
+        cr.setSourceRGBA(0.07, 0.07, 0.09, 0.85);
+        const pitch = 3.5;
+        for (let row = 0, y = 2.5; y < h - 1.5; row++, y += pitch) {
+            for (let x = 2.5 + (row % 2) * pitch / 2; x < w - 1.5; x += pitch) {
+                cr.arc(x, y, 0.8, 0, 2 * Math.PI);
+                cr.fill();
+            }
+        }
+        cr.$dispose();
+    }
+
+    // A short trapezoid neck down to a wide, glossy oval base.
+    _drawStand(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        const cx = w / 2;
+        const baseH = 8;
+        cr.moveTo(cx - 22, 0);
+        cr.lineTo(cx + 22, 0);
+        cr.lineTo(cx + 32, h - baseH / 2);
+        cr.lineTo(cx - 32, h - baseH / 2);
+        cr.closePath();
+        const neck = new Cairo.LinearGradient(cx - 32, 0, cx + 32, 0);
+        neck.addColorStopRGBA(0, 0.06, 0.06, 0.07, 1);
+        neck.addColorStopRGBA(0.5, 0.2, 0.21, 0.24, 1);
+        neck.addColorStopRGBA(1, 0.06, 0.06, 0.07, 1);
+        cr.setSource(neck);
+        cr.fill();
+
+        const rx = Math.min(120, w * 0.3);
+        cr.save();
+        cr.translate(cx, h - baseH / 2);
+        cr.scale(rx, baseH / 2);
+        cr.arc(0, 0, 1, 0, 2 * Math.PI);
+        cr.restore();
+        const base = new Cairo.LinearGradient(0, h - baseH, 0, h);
+        base.addColorStopRGBA(0, 0.24, 0.25, 0.28, 1);
+        base.addColorStopRGBA(1, 0.04, 0.04, 0.05, 1);
+        cr.setSource(base);
+        cr.fill();
         cr.$dispose();
     }
 
