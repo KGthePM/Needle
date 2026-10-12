@@ -929,10 +929,17 @@ class MacAlertTests(unittest.TestCase):
         self.assertTrue(self.titles(weekly_only, "5-hour")[0].startswith("C 70% |"))
         self.assertTrue(self.titles(weekly_only, "both")[0].startswith("C 70% |"))
 
+    def test_icon_only_moves_the_numbers_to_the_tooltip(self):
+        lines = self.titles(self.both_windows(), "icon")
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith(" | sfimage=gauge.with.dots.needle.50percent"))
+        self.assertIn('tooltip="C 41%  $14"', lines[0])
+
     def test_menu_bar_window_setting_defaults_to_tightest(self):
         self.assertEqual(self.mac.menu_bar_window({}), "tightest")
         self.assertEqual(self.mac.menu_bar_window({"mac": {"menu_bar_window": "bogus"}}), "tightest")
         self.assertEqual(self.mac.menu_bar_window({"mac": {"menu_bar_window": "weekly"}}), "weekly")
+        self.assertEqual(self.mac.menu_bar_window({"mac": {"menu_bar_window": "icon"}}), "icon")
 
 class UpdateTests(unittest.TestCase):
     RELEASE = {"latest": "99.0.0", "url": "https://example.test/r", "notes": "New", "zipball": "z"}

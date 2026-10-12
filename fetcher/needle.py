@@ -11,7 +11,7 @@ plus a running count of the tokens you run on local models.
   needle --update   download the latest release and rerun the installer
   needle --check-updates  look for a new release now instead of waiting for the daily check
   needle --set-notify on|off  low-limit notifications on the Mac and Windows front ends
-  needle --set-mac-menu-bar-window MODE  tightest, 5-hour, weekly, both or alternate
+  needle --set-mac-menu-bar-window MODE  tightest, 5-hour, weekly, both, alternate or icon
 
 Standard library only. Works on Linux, macOS and Windows.
 """
@@ -36,7 +36,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.20.0"
+VERSION = "1.21.0"
 TIMEOUT = 10
 
 
@@ -868,7 +868,7 @@ PROVIDER_IDS = {provider[0] for provider in PROVIDERS}
 KEY_PROVIDERS = {"zai", "openrouter"}
 DEFAULT_ON = {"local"}  # reads local files only, so it needs no setup
 TRAY_HOVER_PERCENTAGE_MODES = {"hourly", "weekly", "both"}
-MAC_MENU_BAR_WINDOWS = {"tightest", "5-hour", "weekly", "both", "alternate"}
+MAC_MENU_BAR_WINDOWS = {"tightest", "5-hour", "weekly", "both", "alternate", "icon"}
 WINDOWS_THEME_MODES = {"light", "system", "dark", "night", "custom"}
 WINDOWS_THEME_COLOR_ROLES = {
     "background",

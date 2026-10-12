@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # <xbar.title>Needle</xbar.title>
-# <xbar.version>v1.20.0</xbar.version>
+# <xbar.version>v1.21.0</xbar.version>
 # <xbar.author>KGthePM</xbar.author>
 # <xbar.desc>Claude, ChatGPT/Codex, z.ai and OpenRouter limits at a glance, plus a count of your local AI tokens.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
@@ -15,6 +15,7 @@ own cooldowns still apply, so Claude is never asked more than once per 5 minutes
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -66,6 +67,7 @@ MENU_BAR_WINDOWS = (
     ("weekly", "Weekly"),
     ("both", "Both (5-hour/weekly)"),
     ("alternate", "Alternate 5-hour and weekly"),
+    ("icon", "Icon only"),
 )
 ALTERNATE_TAG = {"5-hour": "5h", "weekly": "Wk"}
 PACE = {"fast": ("▲ fast", "warn"), "even": ("● on pace", "dim"), "slow": ("▼ plenty", "ok")}
@@ -245,6 +247,12 @@ def render_title(providers, mode="tightest"):
     if mode == "alternate" and any(binding_left(p) is not None for p in providers):
         for window, tag in ALTERNATE_TAG.items():
             item(f"{tag}  {title_text(providers, window)}", sfimage=gauge_symbol(lowest), ansi=True)
+        return
+    # Icon only takes the least room, so macOS is less likely to hide it behind the notch.
+    # The numbers move to the hover tooltip.
+    if mode == "icon":
+        tooltip = re.sub(r"\x1b\[[0-9;]*m", "", title_text(providers, "tightest"))
+        item("", sfimage=gauge_symbol(lowest), tooltip=tooltip)
         return
     item(title_text(providers, mode), sfimage=gauge_symbol(lowest), ansi=True)
 
