@@ -3,6 +3,7 @@
 // happens in the `needle` Python fetcher; this file only runs it and draws the result.
 
 const Desklet = imports.ui.desklet;
+const Main = imports.ui.main;
 const Settings = imports.ui.settings;
 const Util = imports.misc.util;
 const ByteArray = imports.byteArray;
@@ -30,7 +31,7 @@ const STALE_AGE = 3600;           // snapshot older than 1h dims the card
 
 const LEVEL_FILL = { ok: "needle-fill-ok", warn: "needle-fill-warn", crit: "needle-fill-crit" };
 
-const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv", "gb", "xeno", "hdtv"];
+const THEMES = ["midnight", "forest", "paper", "plum", "retro", "tv", "gb", "xeno", "hdtv", "oled"];
 const RETRO_CELLS = { portrait: 24, landscape: 20 }; // character cells in a Retro CRT text gauge
 const BAR_WIDTH = { portrait: 300, landscape: 240 };  // gauge fill width at 100%; mirrors the CSS widths
 // Tube TV: the cabinet and screen frame eat into the card, so the screen is narrower.
@@ -57,6 +58,10 @@ const XENO_GLYPHS = [
 // Plasma TV: gauges are rows of on-screen-display segments (4px + 2px gap), like a 2000s volume bar.
 const HDTV_SEGMENTS = { portrait: 45, landscape: 32 };
 const HDTV_STAND_HEIGHT = 18; // px of pedestal under the bezel
+// Modern TV: the hairline frame and screen padding eat into the card; pill gauges span the rest.
+const OLED_BAR_WIDTH = { portrait: 288, landscape: 240 };
+const OLED_BAR_HEIGHT = 6;
+const OLED_FEET_HEIGHT = 12; // px of splayed metal feet under the panel
 
 const now = () => Date.now() / 1000;
 
@@ -141,7 +146,7 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._beatId = 0;
         this._bulb = null;
         this._stale = false;
-        this._xenoLevel = "ok";
+        this._worstLevel = "ok";
 
         this.setHeader(_("PineNeedle"));
         this.setContent(this._buildCard());
@@ -165,7 +170,15 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._tickId = 0;
         if (this._beatId) GLib.source_remove(this._beatId);
         this._beatId = 0;
-        if (this.settings) this.settings.finalize();
+        if (this.settings) {
+            // Cinnamon calls this after the 500ms fade-out, and a reload has already built the
+            // new desklet under the same instance id by then. finalize() would unregister the
+            // new desklet's settings, so Configure's updates would fail until Cinnamon restarts.
+            const slots = Main.settingsManager.uuids[UUID] || {};
+            const current = slots[this.settings.instanceId];
+            this.settings.finalize();
+            if (current && current !== this.settings) slots[this.settings.instanceId] = current;
+        }
     }
 
     // -------------------------------------------------------------- data
@@ -337,6 +350,19 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._hdtvStand = new St.DrawingArea({ height: HDTV_STAND_HEIGHT });
         this._hdtvStand.connect("repaint", (area) => this._drawStand(area));
         this._card.add(this._hdtvStand, { x_fill: true });
+        // Modern TV's slim bottom bezel with the glowing logo light, which refreshes the card.
+        this._oledChin = new St.BoxLayout({ style_class: "needle-oled-chin" });
+        const logo = new St.Button({ style_class: "needle-oled-logo", can_focus: true, track_hover: true });
+        this._oledGlow = new St.Widget({ style_class: "needle-oled-glow" });
+        logo.set_child(this._oledGlow);
+        logo.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
+        new Tooltips.Tooltip(logo, _("Wake the screen (refresh now)"));
+        this._oledChin.add(logo, { expand: true, x_fill: false, x_align: St.Align.MIDDLE });
+        this._card.add(this._oledChin);
+        // Two thin splayed metal feet near the panel's ends.
+        this._oledFeet = new St.DrawingArea({ height: OLED_FEET_HEIGHT });
+        this._oledFeet.connect("repaint", (area) => this._drawFeet(area));
+        this._card.add(this._oledFeet, { x_fill: true });
         this._render();
         return this._card;
     }
@@ -355,8 +381,8 @@ class PineNeedleDesklet extends Desklet.Desklet {
         const refresh = new St.Button({ label: "↻", style_class: "needle-refresh-btn", can_focus: true, track_hover: true });
         refresh.connect("clicked", () => { this._lastLiveAt = 0; this._maybeLive(); });
         // Tube TV refreshes from its channel knob, Pocket from its A button, Xeno from its life sign,
-        // Plasma TV from its channel button.
-        if (!this._tv() && !this._gb() && !this._xeno() && !this._hdtv()) header.add(refresh);
+        // Plasma TV from its channel button, Modern TV from its logo light.
+        if (!this._tv() && !this._gb() && !this._xeno() && !this._hdtv() && !this._oled()) header.add(refresh);
         this._content.add(header);
 
         if (this._fatal) {
@@ -405,9 +431,9 @@ class PineNeedleDesklet extends Desklet.Desklet {
         const low = providers.some((p) => { const left = bindingLeft(p); return left !== null && level(left) === "crit"; });
         if (low) this._gbLed.add_style_class_name("needle-gb-led-low");
         else this._gbLed.remove_style_class_name("needle-gb-led-low");
-        // Xeno's heartbeat quickens with the worst level on the card.
+        // Xeno's heartbeat quickens with the worst level on the card; Modern TV's backlight takes its color.
         const levels = providers.map(bindingLeft).filter((left) => left !== null).map(level);
-        this._xenoLevel = levels.indexOf("crit") !== -1 ? "crit" : levels.indexOf("warn") !== -1 ? "warn" : "ok";
+        this._worstLevel = levels.indexOf("crit") !== -1 ? "crit" : levels.indexOf("warn") !== -1 ? "warn" : "ok";
 
         const hint = this._data && this._data.hint;
         if (hint) this._content.add(this._note(`${hintText(hint)}.`, false));
@@ -417,10 +443,13 @@ class PineNeedleDesklet extends Desklet.Desklet {
         if (this._stale) {
             this._card.add_style_class_name("needle-stale");
             this._hdtvLed.add_style_class_name("needle-hdtv-led-standby");
+            this._oledGlow.add_style_class_name("needle-oled-glow-standby");
         } else {
             this._card.remove_style_class_name("needle-stale");
             this._hdtvLed.remove_style_class_name("needle-hdtv-led-standby");
+            this._oledGlow.remove_style_class_name("needle-oled-glow-standby");
         }
+        this._syncAmbient();
         this._syncHeartbeat();
     }
 
@@ -531,6 +560,7 @@ class PineNeedleDesklet extends Desklet.Desklet {
         if (this._gb()) return this._cellBar(frac, lvl);
         if (this._xeno()) return this._energyBar(frac, lvl);
         if (this._hdtv()) return this._segmentBar(frac, lvl);
+        if (this._oled()) return this._pillBar(frac, lvl);
         const track = new St.Widget({ style_class: "needle-track", layout_manager: new Clutter.FixedLayout() });
         track.set_x_align(Clutter.ActorAlign.START);
         const px = Math.max(0, Math.min(1, frac));
@@ -584,6 +614,23 @@ class PineNeedleDesklet extends Desklet.Desklet {
         return row;
     }
 
+    // Modern TV gauge: a rounded pill track with a smooth, softly glowing fill, like a
+    // streaming app's progress bar. A sliver never drops below a full round cap.
+    _pillBar(frac, lvl) {
+        const width = OLED_BAR_WIDTH[this._orientationName()];
+        const track = new St.Widget({ style_class: "needle-oled-track", layout_manager: new Clutter.FixedLayout() });
+        track.set_x_align(Clutter.ActorAlign.START);
+        track.set_size(width, OLED_BAR_HEIGHT);
+        const px = Math.round(width * Math.max(0, Math.min(1, frac)));
+        if (px > 0) {
+            const fill = new St.Widget({ style_class: `needle-oled-fill needle-oled-fill-${lvl}` });
+            fill.set_size(Math.max(px, OLED_BAR_HEIGHT), OLED_BAR_HEIGHT);
+            fill.set_position(0, 0);
+            track.add_child(fill);
+        }
+        return track;
+    }
+
     _note(text, isError) {
         const l = new St.Label({ text: text, style_class: isError ? "needle-error-note" : "needle-setup-hint needle-muted" });
         l.clutter_text.line_wrap = true;
@@ -613,6 +660,10 @@ class PineNeedleDesklet extends Desklet.Desklet {
 
     _hdtv() {
         return this._themeName() === "hdtv";
+    }
+
+    _oled() {
+        return this._themeName() === "oled";
     }
 
     _orientationName() {
@@ -668,7 +719,18 @@ class PineNeedleDesklet extends Desklet.Desklet {
         this._hdtvStrip.visible = hdtv && !this._landscape();
         this._hdtvStand.visible = hdtv;
         if (hdtv) this._body.vertical = !this._landscape();
+
+        const oled = this._oled();
+        this._oledChin.visible = oled;
+        this._oledFeet.visible = oled;
+        this._syncAmbient();
         this._syncHeartbeat();
+    }
+
+    // Modern TV's ambient backlight takes the worst level's color, and goes dark in standby.
+    _syncAmbient() {
+        const glow = this._stale ? "off" : this._worstLevel || "ok";
+        this._body.set_style_class_name(this._oled() ? `needle-body needle-oled-ambient-${glow}` : "needle-body");
     }
 
     // Xeno hardware. The life-sign bulb refreshes the card; ribs and glyphs are just for looks.
@@ -707,7 +769,7 @@ class PineNeedleDesklet extends Desklet.Desklet {
     // The bulb's look: level color, bright on a beat and dim between, dark when flatlined.
     _paintBulb(beat) {
         if (!this._bulb) return;
-        const lvl = this._xenoLevel || "ok";
+        const lvl = this._worstLevel || "ok";
         this._bulb.set_style_class_name(`needle-xeno-bulb needle-xeno-bulb-${lvl}${beat ? "-beat" : ""}`);
     }
 
@@ -720,7 +782,7 @@ class PineNeedleDesklet extends Desklet.Desklet {
     }
 
     _beat(step) {
-        const period = 60000 / XENO_BPM[this._xenoLevel || "ok"];
+        const period = 60000 / XENO_BPM[this._worstLevel || "ok"];
         const pattern = [[true, 110], [false, 120], [true, 110], [false, Math.max(200, period - 340)]];
         const [on, ms] = pattern[step];
         this._paintBulb(on);
@@ -913,6 +975,31 @@ class PineNeedleDesklet extends Desklet.Desklet {
         base.addColorStopRGBA(1, 0.04, 0.04, 0.05, 1);
         cr.setSource(base);
         cr.fill();
+        cr.$dispose();
+    }
+
+    // Modern TV feet: a thin brushed-metal blade near each end, splayed outward from the
+    // panel, with a short toe resting on the desk.
+    _drawFeet(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        const inset = Math.round(w * 0.12);
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.setLineJoin(Cairo.LineJoin.ROUND);
+        for (const dir of [-1, 1]) {
+            const x = dir < 0 ? inset : w - inset;
+            const toe = x + dir * 9;
+            const metal = new Cairo.LinearGradient(x - 10, 0, x + 10, 0);
+            metal.addColorStopRGBA(0, 0.42, 0.44, 0.48, 1);
+            metal.addColorStopRGBA(0.5, 0.78, 0.8, 0.84, 1);
+            metal.addColorStopRGBA(1, 0.36, 0.38, 0.42, 1);
+            cr.setSource(metal);
+            cr.setLineWidth(2.5);
+            cr.moveTo(x - dir * 2, 0);
+            cr.lineTo(toe, h - 1.5);
+            cr.lineTo(toe + dir * 5, h - 1.5);
+            cr.stroke();
+        }
         cr.$dispose();
     }
 
