@@ -453,6 +453,33 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 1)
         self.assertEqual(second["providers"][0]["attempted_at"], 1000)
 
+    def test_unreached_server_retries_on_next_refresh(self):
+        windows = {"windows": [{"label": "5-hour", "used": 10}]}
+        fetch = mock.Mock(side_effect=[windows, needle.urllib.error.URLError("no network"), windows])
+        providers = [("claude", "Claude", fetch)]
+        config = {"claude": {"enabled": True}}
+        snap = {}
+        for now in (1000, 1400, 1401):
+            with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+                needle.time, "time", return_value=now
+            ):
+                snap = needle.snapshot(config, snap)
+            if now == 1400:
+                self.assertTrue(snap["providers"][0]["stale"])
+                self.assertNotIn("attempted_at", snap["providers"][0])
+        self.assertEqual(fetch.call_count, 3)
+        self.assertNotIn("error", snap["providers"][0])
+
+    def test_rejected_request_still_starts_cooldown(self):
+        error = needle.urllib.error.HTTPError("https://example.test", 429, "Too Many", {}, None)
+        fetch = mock.Mock(side_effect=error)
+        providers = [("claude", "Claude", fetch)]
+        with mock.patch.object(needle, "PROVIDERS", providers), mock.patch.object(
+            needle.time, "time", return_value=1000
+        ):
+            result = needle.snapshot({"claude": {"enabled": True}}, {})
+        self.assertEqual(result["providers"][0]["attempted_at"], 1000)
+
     def test_snapshot_reports_when_refresh_would_fetch_again(self):
         fetch = mock.Mock(return_value={"windows": [{"label": "Weekly", "used": 10}]})
         providers = [("codex", "ChatGPT / Codex", fetch), ("zai", "z.ai", fetch)]

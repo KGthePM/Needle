@@ -36,7 +36,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.22.0"
+VERSION = "1.22.1"
 TIMEOUT = 10
 
 
@@ -1291,7 +1291,10 @@ def snapshot(cfg, cache, cached_only=False, force=False):
                 result = {"id": pid, "name": name, "ok": False, "error": msg}
                 if isinstance(err, MissingKey):
                     result["needs_key"] = True
-            if isinstance(err, ResponseError) or not isinstance(err, ProviderError):
+            # A request that never connected (no network yet after waking, DNS down)
+            # didn't reach the provider, so it doesn't start the cooldown either.
+            reached = not isinstance(err, urllib.error.URLError) or isinstance(err, urllib.error.HTTPError)
+            if reached and (isinstance(err, ResponseError) or not isinstance(err, ProviderError)):
                 result["attempted_at"] = now
         out.append(result)
     for provider in out:
