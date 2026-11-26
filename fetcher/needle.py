@@ -36,7 +36,7 @@ if os.name == "nt":
 else:
     import fcntl
 
-VERSION = "1.22.1"
+VERSION = "1.23.0"
 TIMEOUT = 10
 
 
@@ -342,7 +342,8 @@ def jwt_claims(token):
     """Payload of a JWT, unverified. Only used to read expiry and account id."""
     try:
         part = token.split(".")[1]
-        return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        return claims if isinstance(claims, dict) else {}
     except (AttributeError, binascii.Error, IndexError, UnicodeDecodeError, ValueError):
         return {}
 
@@ -358,7 +359,85 @@ def account_from_claims(claims):
     return claims.get("chatgpt_account_id") or auth.get("chatgpt_account_id") or organization.get("id")
 
 
+def opencode_cli():
+    """Find OpenCode even when a desktop launcher inherits a short PATH."""
+    home = Path.home()
+    extra = [home / ".opencode" / "bin", home / ".local" / "bin"]
+    if os.name == "nt":
+        names = ("opencode.exe", "opencode.cmd", "opencode.bat")
+        extra.append(Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / "npm")
+    else:
+        names = ("opencode",)
+        extra.extend((Path("/opt/homebrew/bin"), Path("/usr/local/bin")))
+    for directory in [*(Path(p.strip('"')) for p in os.get_exec_path()), *extra]:
+        # Do not pick up an executable from the working directory or a relative PATH entry.
+        if directory.is_absolute():
+            for name in names:
+                found = shutil.which(str(directory / name))
+                if found:
+                    return found
+    return None
+
+
+def opencode_service_entries():
+    """Read OpenCode 2 credentials via its authenticated local CLI, or None if unavailable."""
+    cli = opencode_cli()
+    if not cli:
+        return None
+    options = dict(stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                   encoding="utf-8", errors="replace", cwd=Path.home(), timeout=TIMEOUT,
+                   check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        version = subprocess.run([cli, "--version"], **options).stdout.strip()
+        match = re.fullmatch(r"(?:opencode\s+)?v?(\d+)\.\d+\.\d+(?:[-+]\S+)?", version)
+        if not match or int(match[1]) < 2:
+            return None
+        # Let the CLI discover and authenticate to its own service. The response
+        # contains secrets, so don't use the HTTP debug logger or print CLI output.
+        reply = subprocess.run([cli, "api", "get", "/api/credential"], **options)
+        data = json.loads(reply.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        log("OpenCode: local sign-in service unavailable.")
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+        log("OpenCode: unrecognized local sign-in response.")
+        return None
+    return data["data"]
+
+
+def opencode_oauth_credentials(auth, live=False):
+    if auth.get("type") != "oauth":
+        raise ProviderError("OpenCode is not using a ChatGPT plan sign-in (it may be using an API key).")
+    token = auth.get("access")
+    if not isinstance(token, str) or not token:
+        raise ProviderError("OpenCode's ChatGPT sign-in has no access token. Reconnect OpenAI in OpenCode.")
+    claims = jwt_claims(token)
+    expires = parse_ts(auth.get("expires"))
+    if expires is None:
+        expires = parse_ts(claims.get("exp"))
+    if expires is not None and expires <= time.time():
+        if live:
+            raise ProviderError("OpenCode's active ChatGPT sign-in expired. If it doesn't renew, sign in again in OpenCode.")
+        raise ProviderError("OpenCode's ChatGPT sign-in expired. Open OpenCode once to refresh it.")
+    metadata = auth.get("metadata") if live else auth
+    account = metadata.get("accountId") if isinstance(metadata, dict) else None
+    return token, account or account_from_claims(claims), "OpenCode"
+
+
 def opencode_credentials(cfg):
+    if "opencode_auth_path" not in cfg:
+        entries = opencode_service_entries()
+        if entries is not None:
+            active = [entry for entry in entries if isinstance(entry, dict)
+                      and entry.get("integrationID") == "openai" and entry.get("active") is True]
+            # A live service with no active sign-in is authoritative; don't use an old V1 account.
+            if not active:
+                return None
+            auth = active[0].get("value")
+            if len(active) != 1 or not isinstance(auth, dict):
+                raise ProviderError("Couldn't read OpenCode's active sign-in.")
+            return opencode_oauth_credentials(auth, live=True)
+
     data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
     path = Path(cfg.get("opencode_auth_path", data_home / "opencode" / "auth.json")).expanduser()
     if not path.exists():
@@ -369,18 +448,7 @@ def opencode_credentials(cfg):
     auth = data.get("openai")
     if not isinstance(auth, dict):
         return None
-    if auth.get("type") != "oauth":
-        raise ProviderError("OpenCode is using an API key, not a ChatGPT plan sign-in.")
-    token = auth.get("access")
-    if not token:
-        raise ProviderError("OpenCode's ChatGPT sign-in has no access token. Reconnect OpenAI in OpenCode.")
-    expires = parse_ts(auth.get("expires"))
-    if expires is None:
-        expires = parse_ts(jwt_claims(token).get("exp"))
-    if expires is not None and expires < time.time():
-        raise ProviderError("OpenCode's ChatGPT sign-in expired. Open OpenCode once to refresh it.")
-    account = auth.get("accountId") or account_from_claims(jwt_claims(token))
-    return token, account, "OpenCode"
+    return opencode_oauth_credentials(auth)
 
 
 def codex_cli_credentials(cfg):
@@ -442,7 +510,13 @@ def fetch_codex(cfg):
     }
     if account:
         headers["ChatGPT-Account-Id"] = account
-    data = http_get("https://chatgpt.com/backend-api/wham/usage", headers)
+    try:
+        data = http_get("https://chatgpt.com/backend-api/wham/usage", headers)
+    except urllib.error.HTTPError as err:
+        if err.code != 401:
+            raise
+        action = "Reconnect OpenAI in OpenCode" if source == "OpenCode" else "Sign in again in Codex CLI"
+        raise ResponseError(f"{source} sign-in was rejected. {action} if it persists.") from None
     limits = data.get("rate_limit") or {}
     windows = []
     for key, fallback in (("primary_window", "5-hour"), ("secondary_window", "Weekly")):

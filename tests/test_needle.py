@@ -278,6 +278,113 @@ class CredentialTests(unittest.TestCase):
     def test_invalid_jwt_is_ignored(self):
         self.assertEqual(needle.jwt_claims("not-a-jwt"), {})
         self.assertEqual(needle.jwt_claims("a.!.c"), {})
+        self.assertEqual(needle.jwt_claims(jwt(["not", "claims"])), {})
+
+    def test_opencode_cli_found_outside_short_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            name = "opencode.exe" if os.name == "nt" else "opencode"
+            path = home / ".opencode" / "bin" / name
+            path.parent.mkdir(parents=True)
+            path.touch()
+            path.chmod(0o755)
+            with mock.patch.object(needle.Path, "home", return_value=home), \
+                    mock.patch.object(needle.os, "get_exec_path", return_value=["", "relative"]):
+                self.assertEqual(needle.opencode_cli(), str(path))
+
+    def test_reads_opencode_service_without_logging_credentials(self):
+        cli = "opencode"
+        entries = [{"integrationID": "openai", "active": True, "value": {
+            "type": "oauth", "access": "not-for-logs", "refresh": "also-not-for-logs",
+        }}]
+        results = [mock.Mock(stdout="opencode v2.3.2\n"), mock.Mock(stdout=json.dumps({"data": entries}))]
+        stderr = io.StringIO()
+        with mock.patch.object(needle, "opencode_cli", return_value=cli), \
+                mock.patch.object(needle.subprocess, "run", side_effect=results) as run, \
+                mock.patch.object(needle, "DEBUG", True), contextlib.redirect_stderr(stderr):
+            self.assertEqual(needle.opencode_service_entries(), entries)
+        self.assertEqual([c.args[0] for c in run.call_args_list],
+                         [[cli, "--version"], [cli, "api", "get", "/api/credential"]])
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs["stderr"], subprocess.DEVNULL)
+            self.assertEqual(call.kwargs["stdin"], subprocess.DEVNULL)
+            self.assertEqual(call.kwargs["timeout"], needle.TIMEOUT)
+            self.assertTrue(call.kwargs["check"])
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_opencode_v1_does_not_call_service(self):
+        with mock.patch.object(needle, "opencode_cli", return_value="opencode"), \
+                mock.patch.object(needle.subprocess, "run", return_value=mock.Mock(stdout="1.4.0\n")) as run:
+            self.assertIsNone(needle.opencode_service_entries())
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ["opencode", "--version"])
+
+    def test_opencode_service_failures_do_not_log_raw_output(self):
+        command = ["opencode", "api", "get", "/api/credential"]
+        for failure in (
+            subprocess.TimeoutExpired(command, needle.TIMEOUT, output="secret"),
+            subprocess.CalledProcessError(1, command, output="secret"),
+            mock.Mock(stdout="malformed secret"),
+            mock.Mock(stdout='{"data": "secret"}'),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                stderr = io.StringIO()
+                with mock.patch.object(needle, "opencode_cli", return_value="opencode"), \
+                        mock.patch.object(needle.subprocess, "run",
+                                          side_effect=[mock.Mock(stdout="2.3.2"), failure]), \
+                        mock.patch.object(needle, "DEBUG", True), contextlib.redirect_stderr(stderr):
+                    self.assertIsNone(needle.opencode_service_entries())
+                self.assertNotIn("secret", stderr.getvalue())
+
+    def test_prefers_active_opencode_service_sign_in_over_legacy_file(self):
+        token = jwt({"exp": time.time() + 3600, "chatgpt_account_id": "jwt-account"})
+        entries = [
+            {"integrationID": "openai", "active": False, "value": {"type": "oauth", "access": "inactive"}},
+            {"integrationID": "other", "active": True, "value": {"type": "oauth", "access": "other"}},
+            {"integrationID": "openai", "active": True, "value": {
+                "type": "oauth", "access": token, "expires": int((time.time() + 3600) * 1000),
+                "metadata": {"accountId": "active-account"},
+            }},
+        ]
+        with mock.patch.object(needle, "opencode_service_entries", return_value=entries), \
+                mock.patch.object(needle, "load_json") as read:
+            self.assertEqual(needle.opencode_credentials({}), (token, "active-account", "OpenCode"))
+        read.assert_not_called()
+
+    def test_openai_service_sign_in_can_use_account_claim(self):
+        token = jwt({"exp": time.time() + 3600, "chatgpt_account_id": "jwt-account"})
+        entry = {"integrationID": "openai", "active": True, "value": {"type": "oauth", "access": token}}
+        with mock.patch.object(needle, "opencode_service_entries", return_value=[entry]):
+            self.assertEqual(needle.opencode_credentials({}), (token, "jwt-account", "OpenCode"))
+
+    def test_opencode_service_missing_or_expired_sign_in_ignores_legacy_file(self):
+        expired = {"integrationID": "openai", "active": True, "value": {
+            "type": "oauth", "access": "old-token", "expires": int((time.time() - 3600) * 1000),
+        }}
+        for entries, message in (([], "Not signed in"), ([expired], "active ChatGPT sign-in expired")):
+            with self.subTest(entries=len(entries)), \
+                    mock.patch.object(needle, "opencode_service_entries", return_value=entries), \
+                    mock.patch.object(needle, "load_json") as read:
+                with self.assertRaisesRegex(needle.ProviderError, message):
+                    needle.codex_credentials({"credential_source": "opencode"})
+                read.assert_not_called()
+
+    def test_opencode_service_does_not_use_active_api_key(self):
+        entry = {"integrationID": "openai", "active": True, "value": {"type": "key", "key": "not-used"}}
+        with mock.patch.object(needle, "opencode_service_entries", return_value=[entry]):
+            with self.assertRaisesRegex(needle.ProviderError, "not using a ChatGPT plan"):
+                needle.opencode_credentials({})
+
+    def test_unavailable_opencode_service_falls_back_to_legacy_file(self):
+        token = jwt({"exp": time.time() + 3600})
+        with tempfile.TemporaryDirectory() as temp:
+            data_home = Path(temp)
+            directory = data_home / "opencode"
+            directory.mkdir()
+            self.write_auth(directory, {"openai": {"type": "oauth", "access": token}})
+            with mock.patch.dict(needle.os.environ, {"XDG_DATA_HOME": str(data_home)}), \
+                    mock.patch.object(needle, "opencode_service_entries", return_value=None):
+                self.assertEqual(needle.opencode_credentials({}), (token, None, "OpenCode"))
 
     def test_reads_opencode_oauth_without_writing_it(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -294,7 +401,9 @@ class CredentialTests(unittest.TestCase):
                 },
             )
             before = path.read_bytes()
-            token, account, source = needle.opencode_credentials({"opencode_auth_path": str(path)})
+            with mock.patch.object(needle, "opencode_service_entries") as service:
+                token, account, source = needle.opencode_credentials({"opencode_auth_path": str(path)})
+            service.assert_not_called()
             self.assertTrue(token.startswith("header."))
             self.assertEqual(account, "stored-account")
             self.assertEqual(source, "OpenCode")
@@ -340,9 +449,11 @@ class CredentialTests(unittest.TestCase):
         self.assertEqual(result[2], "Codex CLI")
 
     def test_explicit_source_and_invalid_source(self):
-        with mock.patch.object(needle, "codex_cli_credentials", return_value=None):
+        with mock.patch.object(needle, "codex_cli_credentials", return_value=None), \
+                mock.patch.object(needle, "opencode_service_entries") as service:
             with self.assertRaisesRegex(needle.ProviderError, "Run `codex`"):
                 needle.codex_credentials({"credential_source": "codex"})
+            service.assert_not_called()
         with self.assertRaisesRegex(needle.ProviderError, "must be"):
             needle.codex_credentials({"credential_source": "other"})
 
@@ -373,6 +484,45 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual([window["label"] for window in result["windows"]], ["5-hour", "Weekly"])
         self.assertEqual(result["windows"][0]["used"], 25.0)
         self.assertEqual(get.call_args.args[1]["ChatGPT-Account-Id"], "account")
+
+    def test_chatgpt_next_refresh_picks_up_renewed_opencode_sign_in(self):
+        now = time.time()
+
+        def credential(token, expiry):
+            return {"integrationID": "openai", "active": True, "value": {
+                "type": "oauth", "access": token, "expires": int(expiry * 1000),
+            }}
+
+        credentials = [[credential("old", now - 1)], [credential("renewed", now + 3600)]]
+        cfg = {"codex": {"credential_source": "opencode"}, "local": {"enabled": False}}
+        previous = {"providers": [{
+            "id": "codex", "ok": True, "fetched_at": now - 3600, "windows": [{"label": "Weekly", "used": 30}],
+        }]}
+        usage = {"rate_limit": {"secondary_window": {"used_percent": 25}}}
+        with mock.patch.object(needle, "opencode_service_entries", side_effect=credentials) as service, \
+                mock.patch.object(needle, "http_get", return_value=usage) as get, \
+                mock.patch.object(needle.time, "time", return_value=now) as clock:
+            stale = needle.snapshot(cfg, previous)
+            self.assertTrue(stale["providers"][0]["stale"])
+            get.assert_not_called()
+            clock.return_value = now + 600
+            fresh = needle.snapshot(cfg, stale)["providers"][0]
+        self.assertEqual(service.call_count, 2)
+        self.assertEqual(fresh["source"], "OpenCode")
+        self.assertNotIn("stale", fresh)
+        self.assertNotIn("error", fresh)
+        self.assertEqual(fresh["windows"][0]["used"], 25.0)
+        self.assertEqual(get.call_args.args[1]["Authorization"], "Bearer renewed")
+
+    def test_chatgpt_rejected_sign_in_names_its_source(self):
+        err = needle.urllib.error.HTTPError("https://chatgpt.com", 401, "Unauthorized", {}, None)
+        for source, guidance in (("OpenCode", "Reconnect OpenAI in OpenCode"),
+                                 ("Codex CLI", "Sign in again in Codex CLI")):
+            with self.subTest(source=source), \
+                    mock.patch.object(needle, "codex_credentials", return_value=("token", None, source)), \
+                    mock.patch.object(needle, "http_get", side_effect=err):
+                with self.assertRaisesRegex(needle.ResponseError, guidance):
+                    needle.fetch_codex({})
 
     def test_successful_usage_marks_service_connected(self):
         fetch = mock.Mock(return_value={"windows": [{"label": "Weekly", "used": 10}]})
@@ -1136,6 +1286,28 @@ public static extern System.IntPtr GetConsoleWindow();
         self.assertIn("GetFolderPath('Programs')) 'Needle.lnk'", uninstaller)
         self.assertNotIn("$shortcut.TargetPath = $powerShell.Source", installer)
         self.assertNotIn("$shortcut.TargetPath = $script:PowerShellPath", tray)
+
+    def test_update_script_delegates_to_sibling_installer(self):
+        with tempfile.TemporaryDirectory(prefix="needle update ") as temp:
+            scripts = Path(temp) / "windows"
+            scripts.mkdir()
+            updater = scripts / "update-windows.ps1"
+            shutil.copyfile(ROOT / "windows" / updater.name, updater)
+            (scripts / "install-windows.ps1").write_text(
+                "param([switch]$Update, [switch]$NoLaunch)\n"
+                "if (-not $Update) { exit 99 }\n"
+                "if ($NoLaunch) { exit 17 }\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            for shell in WINDOWS_POWERSHELLS:
+                for args, expected in (([], 0), (["-NoLaunch"], 17)):
+                    with self.subTest(shell=shell, args=args):
+                        result = subprocess.run(
+                            [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(updater), *args],
+                            cwd=temp, capture_output=True, text=True, timeout=15, check=False,
+                        )
+                        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
     def test_deferred_render_does_not_dispose_active_combobox(self):
         script = r'''

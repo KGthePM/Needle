@@ -34,7 +34,7 @@ Then right-click the panel, choose **Add Widgets**, find **Needle** and drag it 
 New installations start empty. Open Needle and choose **Add a service** (on Windows, **Add more**), then select each provider you want to track. A service moves into the main usage view only after Needle retrieves usable data from it. On the Mac and Linux, **Services** lists the ones you've added first, each with its status, key and **Remove**, then the ones you can still add. A setup that failed shows its error there with a way to try again. z.ai and OpenRouter open a password-style box for the API key; **Get an API key** opens the provider's key page. Claude and ChatGPT/Codex use existing command-line sign-ins and do not need a pasted key.
 
 - **Claude**: nothing to add. It uses your Claude Code sign-in, so you need to have logged in to `claude` with your Pro or Max plan. Claude Code's sign-in expires every few hours and normally refreshes only while `claude` runs. When Needle finds it expired, it runs `claude auth status` in the background so Claude Code refreshes it, then tries again. If that doesn't work (for example, the Mac just woke up and isn't online yet), Needle says it will try again and asks Claude Code once more on the next refresh. Each attempt is noted in `claude-refresh.json` next to Needle's cache. Needle never refreshes or writes the sign-in itself.
-- **ChatGPT / Codex**: nothing to add. Needle first uses the OpenAI OAuth sign-in managed by OpenCode, then falls back to `~/.codex/auth.json`. Sign into OpenAI from OpenCode with the **ChatGPT Plus/Pro** option, or log into Codex CLI with your ChatGPT plan. A ChatGPT subscription does not include OpenAI API credits, and no API key is needed here. Needle reads the access token in place but never copies, refreshes, or writes it. Set `"credential_source": "opencode"` or `"codex"` if both tools use different accounts.
+- **ChatGPT / Codex**: nothing to paste. Sign in to OpenAI in OpenCode with your ChatGPT plan, or sign in to Codex CLI. On each usage refresh, Needle uses the OpenCode 2 CLI to ask its local service for the active OpenAI sign-in. OpenCode may start its background service if needed. Needle picks up renewals automatically without storing credentials or renewing them itself. If the service isn't available, Needle can still read the legacy OpenCode sign-in file; setting `opencode_auth_path` explicitly keeps using that file-based path. In automatic mode it falls back to `~/.codex/auth.json` when OpenCode has no usable sign-in. Set `"credential_source": "opencode"` or `"codex"` if the two tools use different accounts. No OpenAI API key is needed.
 - **z.ai**: paste your Coding Plan API key.
 - **OpenRouter**: a management key shows your whole account balance. A regular key shows that key's own spending limit.
 
@@ -113,13 +113,21 @@ From the menu, choose **Settings** > **Troubleshooting** > **Debug in Terminal**
 
 Once a day Needle checks GitHub for a new release. When there is one, an **Update to 1.x.x…** item shows up at the top of the menu on the Mac, and an **Update** button appears in the popup on Linux and Windows. Clicking it opens a terminal window that downloads the release and reruns the installer. Your keys and settings stay as they are, and it doesn't ask the setup questions again. From a terminal, `needle --update` does the same thing.
 
+To update the Windows tray app from your local checkout instead of downloading a GitHub release, run this from the repository root:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\update-windows.ps1
+```
+
+The script keeps your settings, keys, and start-at-sign-in preference. It launches Needle after updating unless you pass `-NoLaunch`.
+
 To check right away instead of waiting for the daily check, choose **Settings** > **Check for Updates…** on the Mac, click the **Needle** version row in Settings on Linux, or choose **Settings** > **Check for updates** on Windows. Each shows whether you're up to date and when it last checked. From a terminal, `needle --check-updates` does the same.
 
 To turn off the daily check, add `"check_updates": false` at the top level of `config.json`. **Check for updates** still works when you choose it.
 
 ## If something looks off
 
-The Claude, ChatGPT/Codex and z.ai usage endpoints aren't officially documented and can change. If numbers look wrong or a provider shows an error, run `needle --text --debug` (or use the desktop menu's debug action) and check the raw response. If the OpenCode sign-in has expired, open OpenCode once so it can refresh its own OAuth session.
+The Claude, ChatGPT/Codex and z.ai usage endpoints aren't officially documented and can change. If numbers look wrong or a provider shows an error, run `needle --text --debug` (or use the desktop menu's debug action) and check the raw response. Needle doesn't log OpenCode's credential response, even in debug mode. If OpenCode itself can't renew its sign-in, sign in to OpenAI again in OpenCode; Needle will pick up the new sign-in on its next refresh.
 
 ## Install on Windows
 

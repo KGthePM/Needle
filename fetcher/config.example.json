@@ -6,7 +6,7 @@
   },
   "codex": {
     "enabled": false,
-    "_note": "Uses your OpenCode ChatGPT sign-in first, then Codex CLI as a fallback. Nothing to paste here.",
+    "_note": "Uses the active ChatGPT sign-in from OpenCode first, then Codex CLI as a fallback. Nothing to paste here.",
     "credential_source": "auto"
   },
   "zai": {
